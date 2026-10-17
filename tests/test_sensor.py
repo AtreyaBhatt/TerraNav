@@ -117,10 +117,12 @@ def grazing_row(beta_deg: float) -> int:
 def test_grazing_on_flat_ground():
     # Camera 0.5 m above flat ground, pitched down 25 deg. Centre-column pixel v looks
     # beta(v) = 25 deg + atan((v - cy)/fy) below the horizon; on flat ground (normal +z)
-    # the incidence angle is 90 deg - beta. Cutoff 80 deg -> valid iff beta >= 10 deg.
+    # the incidence angle is 90 deg - beta. Cutoff set explicitly to 80 deg (independent of
+    # the default) -> valid iff beta >= 10 deg.
     T = pose(2, 6, 0.5, 0, 25)
-    cfg = SensorConfig(noise_s0_m=0.0, noise_s1_per_m=0.0, dropout_prob=0.0)
-    assert cfg.grazing_cutoff_rad == pytest.approx(math.radians(80.0))
+    cfg = SensorConfig(
+        noise_s0_m=0.0, noise_s1_per_m=0.0, dropout_prob=0.0, grazing_cutoff_rad=math.radians(80.0)
+    )
     ray = cast_frame(flat_world(), T, BIG, cfg.max_depth_z_m)
     frame, dbg = simulate_depth(ray, BIG, T, cfg, np.random.default_rng(0))
     u0 = int(BIG.cx)

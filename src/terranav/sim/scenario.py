@@ -22,13 +22,15 @@ from typing import Any
 import numpy as np
 
 from terranav.config import SimConfig
+from terranav.frames import T_world_cam
 from terranav.sim.world import (
     add_ramp,
     add_rough_patch,
     add_terrace,
+    bilinear_sample,
     box_on_terrain,
 )
-from terranav.types import GridSpec, Scenario, World
+from terranav.types import GridSpec, Scenario, SensorConfig, World
 
 FAMILIES = ("flat_obstacles", "slopes", "rough", "steps", "mixed")
 
@@ -306,3 +308,35 @@ def generate_scenario(family: str, seed: int, cfg: SimConfig | None = None) -> S
     # TODO(M2): reject unsolvable scenarios once the planner exists.
     world = World(hf, grid, boxes, family, seed)
     return Scenario(world, start, goal, family, seed, _freeze(params))
+
+
+# TODO(M2): revisit scan strategy (this is a survey pass with known poses).
+def scan_poses(
+    scenario: Scenario, k: int = 6, sensor: SensorConfig | None = None
+) -> list[np.ndarray]:
+    """PLACEHOLDER survey pass: k known camera poses along the straight start->goal segment.
+
+    Pose i (i = 0..k-1) sits at fraction i / (k - 1) of the segment (0, 0.2, ..., 1.0 for
+    k = 6), sensor.mount_height_m above the support surface there, yawed toward the goal and
+    pitched down by sensor.pitch_down_rad. The support surface is the bilinear terrain height,
+    or the top of a box whose footprint contains the point (a camera may not sit inside a
+    box). Returns (4, 4) float64 T_world_cam matrices.
+
+    Frame i is captured with the per-frame generator np.random.default_rng((scenario.seed, i)).
+    """
+    if k < 2:
+        raise ValueError(f"k must be >= 2, got {k}")
+    sensor = sensor if sensor is not None else SensorConfig()
+    s, g = np.asarray(scenario.start_xy), np.asarray(scenario.goal_xy)
+    yaw_rad = math.atan2(g[1] - s[1], g[0] - s[0])
+    world = scenario.world
+    poses = []
+    for frac in np.linspace(0.0, 1.0, k):
+        x, y = s + frac * (g - s)
+        support = float(bilinear_sample(world.heightfield, world.grid, x, y))
+        for b in world.boxes:
+            if b.min_xyz[0] <= x <= b.max_xyz[0] and b.min_xyz[1] <= y <= b.max_xyz[1]:
+                support = max(support, b.max_xyz[2])
+        position = np.array([x, y, support + sensor.mount_height_m])
+        poses.append(T_world_cam(position, yaw_rad, sensor.pitch_down_rad))
+    return poses

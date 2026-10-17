@@ -12,9 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import ndimage
 
 from terranav.frames import pixel_rays_cam
+from terranav.sim.world import bilinear_sample
 from terranav.types import Box, CameraIntrinsics, GridSpec, World
 
 HIT_NONE, HIT_TERRAIN, HIT_BOX = 0, 1, 2
@@ -62,23 +62,9 @@ def range_to_depth(range_t: np.ndarray, intrinsics: CameraIntrinsics) -> np.ndar
     return np.asarray(range_t, dtype=np.float64) * unit_rays_cam(intrinsics)[..., 2]
 
 
-def _rowcol(grid: GridSpec, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Fractional (row, col) for map_coordinates under the cell-centre convention."""
-    col = (x - grid.origin[0]) / grid.resolution - 0.5
-    row = (y - grid.origin[1]) / grid.resolution - 0.5
-    return row, col
-
-
 def _inside(grid: GridSpec, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     x0, y0 = grid.origin
     return (x >= x0) & (x <= x0 + grid.size_x) & (y >= y0) & (y <= y0 + grid.size_y)
-
-
-def _bilinear(field: np.ndarray, grid: GridSpec, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Bilinear sample of a (ny, nx) grid field at world (x, y). Edge half-cells clamp."""
-    row, col = _rowcol(grid, x, y)
-    coords = np.stack([np.ravel(row), np.ravel(col)])
-    return ndimage.map_coordinates(field, coords, order=1, mode="nearest").reshape(np.shape(x))
 
 
 def _terrain_hits(
@@ -97,7 +83,7 @@ def _terrain_hits(
         t = np.arange(int(np.ceil(tm.max() / step)) + 2) * step  # (K,)
         p = origin[None, None, :] + t[None, :, None] * d[:, None, :]  # (n, K, 3)
         inside = _inside(grid, p[..., 0], p[..., 1]) & (t[None, :] <= tm[:, None] + step)
-        f = p[..., 2] - _bilinear(hf, grid, p[..., 0], p[..., 1])
+        f = p[..., 2] - bilinear_sample(hf, grid, p[..., 0], p[..., 1])
         cross = inside[:, :-1] & inside[:, 1:] & (f[:, :-1] > 0) & (f[:, 1:] <= 0)
         has = cross.any(axis=1)
         if not has.any():
@@ -109,7 +95,7 @@ def _terrain_hits(
         for _ in range(BISECTION_STEPS):
             mid = 0.5 * (lo + hi)
             q = origin + mid[:, None] * dh
-            f_mid = q[:, 2] - _bilinear(hf, grid, q[:, 0], q[:, 1])
+            f_mid = q[:, 2] - bilinear_sample(hf, grid, q[:, 0], q[:, 1])
             above = f_mid > 0
             lo, f_lo = np.where(above, mid, lo), np.where(above, f_mid, f_lo)
             hi, f_hi = np.where(above, hi, mid), np.where(above, f_hi, f_mid)
@@ -160,7 +146,7 @@ def cast_frame(
     grid, hf = world.grid, world.heightfield
     origin = T[:3, 3]
     ox, oy = np.array([origin[0]]), np.array([origin[1]])
-    if _inside(grid, ox, oy)[0] and origin[2] <= _bilinear(hf, grid, ox, oy)[0]:
+    if _inside(grid, ox, oy)[0] and origin[2] <= bilinear_sample(hf, grid, ox, oy)[0]:
         raise ValueError(f"camera origin {origin} is at or below the terrain")
     for box in world.boxes:
         if np.all((origin >= box.min_xyz) & (origin <= box.max_xyz)):
@@ -191,7 +177,11 @@ def cast_frame(
         gy, gx = np.gradient(hf, grid.resolution)  # d/drow = d/dy, d/dcol = d/dx
         px, py = points[terrain, 0], points[terrain, 1]
         n = np.stack(
-            [-_bilinear(gx, grid, px, py), -_bilinear(gy, grid, px, py), np.ones(len(px))],
+            [
+                -bilinear_sample(gx, grid, px, py),
+                -bilinear_sample(gy, grid, px, py),
+                np.ones(len(px)),
+            ],
             axis=1,
         )
         normals[terrain] = n / np.linalg.norm(n, axis=1, keepdims=True)

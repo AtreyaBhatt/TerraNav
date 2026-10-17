@@ -90,3 +90,9 @@ range_t = depth_z · ||d_cam||        depth_z = range_t / ||d_cam||
 
 They agree only on the optical axis; toward image corners `||d_cam|| > 1` and
 `range_t > depth_z`. Variables are always named `depth_z` or `range_t`, never mixed.
+
+**Grazing visibility.** The sensor invalidates hits whose incidence angle (between the
+reversed ray and the surface normal) exceeds the grazing cutoff. On flat ground a ray that
+dips beta below the horizon has incidence 90° − beta, so ground is valid only out to a
+horizontal distance of `h · tan(cutoff)` for a camera at height h: ≈ 5.7 m at h = 0.5 m
+with the 85° default (≈ 2.8 m at 80°).

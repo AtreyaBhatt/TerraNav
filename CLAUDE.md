@@ -39,5 +39,5 @@ hypothesis, ruff. Managed with uv. NO ROS, Gazebo, GPU libs, Rust, Open3D, torch
 ## Defaults
 World 12x12 m, heightfield 0.05 m. Camera 320x240, hfov 87°, mounted 0.5 m
 above ground, pitch_down 25°, max range 8 m, noise sigma(z) = s0 + s1*z^2
-(s0=0.001, s1=0.0015, illustrative), dropout 2%, grazing cutoff ~80°.
+(s0=0.001, s1=0.0015, illustrative), dropout 2%, grazing cutoff 85°.
 Map grid 0.1 m (120x120), unknown = blocked.

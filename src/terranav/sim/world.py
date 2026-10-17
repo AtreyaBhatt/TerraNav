@@ -26,6 +26,20 @@ def cell_centers_xy(grid: GridSpec) -> tuple[np.ndarray, np.ndarray]:
     return grid.rc_to_xy(row, col)
 
 
+def bilinear_sample(field: np.ndarray, grid: GridSpec, x, y) -> np.ndarray:
+    """Bilinear sample of a (ny, nx) grid field at world (x, y), metres. Returns shape of x.
+
+    Cell-centre convention: fractional col = (x - origin_x)/res - 0.5, row likewise from y;
+    scipy map_coordinates takes (row, col). The outer half-cell of the map clamps to the
+    edge values (mode="nearest"); callers decide what "outside the map" means.
+    """
+    x, y = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+    col = (x - grid.origin[0]) / grid.resolution - 0.5
+    row = (y - grid.origin[1]) / grid.resolution - 0.5
+    coords = np.stack([np.ravel(row), np.ravel(col)])
+    return ndimage.map_coordinates(field, coords, order=1, mode="nearest").reshape(np.shape(x))
+
+
 def _check_hf(hf: np.ndarray, grid: GridSpec) -> np.ndarray:
     hf = np.asarray(hf, dtype=np.float64)
     if hf.shape != (grid.ny, grid.nx):

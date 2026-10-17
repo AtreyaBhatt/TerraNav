@@ -11,9 +11,9 @@ from hypothesis import strategies as st
 from scipy import ndimage
 
 from terranav.config import SimConfig
-from terranav.sim.scenario import FAMILIES, generate_scenario
+from terranav.sim.scenario import FAMILIES, generate_scenario, scan_poses
 from terranav.sim.world import add_ramp, add_rough_patch, add_terrace, box_on_terrain
-from terranav.types import GridSpec
+from terranav.types import Box, GridSpec, Scenario, World
 
 CFG = SimConfig()
 GRID = CFG.terrain_grid
@@ -353,3 +353,32 @@ def test_box_sits_on_terrain():
     box = box_on_terrain(GRID, hf, (5.5, 5.0), (6.5, 6.0), 0.5)
     assert box.min_xyz == pytest.approx((5.5, 5.0, 0.0))
     assert box.max_xyz == pytest.approx((6.5, 6.0, 0.7))
+
+
+# --- Scan poses (placeholder survey pass) ------------------------------------------
+
+
+def test_scan_poses_along_segment():
+    # Flat world, start (1, 2), goal (11, 7): direction (10, 5), yaw = atan2(5, 10).
+    # A 0.8 m box straddles the 0.6 fraction point (7, 5); the camera there must sit on its top.
+    box = Box((6.5, 4.5, 0.0), (7.5, 5.5, 0.8))
+    world = World(zeros(), GRID, (box,), "test", 0)
+    sc = Scenario(world, (1.0, 2.0), (11.0, 7.0), "test", 0, {})
+    poses = scan_poses(sc, k=6)
+    assert len(poses) == 6
+    yaw, pitch = math.atan2(5.0, 10.0), math.radians(25.0)
+    axis = [math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), -math.sin(pitch)]
+    for i, T in enumerate(poses):
+        frac = i / 5
+        z = 0.8 + 0.5 if i == 3 else 0.5
+        np.testing.assert_allclose(T[:3, 3], [1 + 10 * frac, 2 + 5 * frac, z], atol=1e-12)
+        np.testing.assert_allclose(T[:3, 2], axis, atol=1e-12)  # optical z axis in world
+
+
+def test_scan_poses_follow_terrain():
+    # One-step mesa 0.2 m high under the 0.4 fraction point of a start (1, 6) -> goal (11, 6)
+    # segment, i.e. at (5, 6): that pose sits 0.5 m above the mesa top.
+    hf = add_terrace(zeros(), GRID, (5.0, 6.0), (2.0, 2.0), 0.0, 0.2, 1, 1.0, 1)
+    sc = Scenario(World(hf, GRID, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
+    zs = [T[2, 3] for T in scan_poses(sc, k=6)]
+    np.testing.assert_allclose(zs, [0.5, 0.5, 0.7, 0.5, 0.5, 0.5], atol=1e-12)

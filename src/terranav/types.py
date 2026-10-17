@@ -17,7 +17,7 @@ import numpy as np
 # This block is the ONLY place where degree-valued defaults are converted to radians.
 DEFAULT_HFOV_RAD = math.radians(87.0)
 DEFAULT_PITCH_DOWN_RAD = math.radians(25.0)
-DEFAULT_GRAZING_CUTOFF_RAD = math.radians(80.0)
+DEFAULT_GRAZING_CUTOFF_RAD = math.radians(85.0)
 
 DEFAULT_IMAGE_WIDTH = 320
 DEFAULT_IMAGE_HEIGHT = 240

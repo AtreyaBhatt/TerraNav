@@ -11,7 +11,7 @@ function signature; degrees appear only in config defaults (converted once, in
 - Origin at the map corner; the default world covers x, y ∈ [0, 12] m.
 - Heightfield: `(ny, nx)` float64 array indexed **`[row=iy, col=ix]`**, cell size 0.05 m.
   Cell `(iy, ix)` has its centre at `origin + ((ix+0.5)·res, (iy+0.5)·res)`;
-  `GridSpec.world_to_cell(x, y) -> (iy, ix)` and `GridSpec.cell_to_world(iy, ix) -> (x, y)`.
+  `GridSpec.xy_to_rc(x, y) -> (row, col)` and `GridSpec.rc_to_xy(row, col) -> (x, y)`.
   `scipy.ndimage.map_coordinates` takes `(row, col)` — convert metres↔cells explicitly.
 - Map grid: 0.1 m (120×120); unknown cells are treated as blocked.
 

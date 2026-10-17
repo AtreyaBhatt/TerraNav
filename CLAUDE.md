@@ -18,6 +18,7 @@ hypothesis, ruff. Managed with uv. NO ROS, Gazebo, GPU libs, Rust, Open3D, torch
 - Invalid depth = NaN, never 0.
 - Never invent benchmark numbers or claim results that were not measured.
 - Prefer small pure functions with docstrings stating units and frames.
+- Every angle parameter name carries a unit suffix (_rad/_deg), e.g. yaw_rad, slope_deg.
 - Do not touch files outside the current step except for imports/stubs.
 
 ## Frame conventions (authoritative; see docs/frames.md)

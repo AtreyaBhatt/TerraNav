@@ -27,44 +27,44 @@ R_BASE = np.array(
 )
 
 
-def rot_y(t: float) -> np.ndarray:
-    """Rotation by angle t (radians) about the +y axis. Returns (3,3) float64.
+def rot_y(t_rad: float) -> np.ndarray:
+    """Rotation by angle t_rad (radians) about the +y axis. Returns (3,3) float64.
 
     Ry(t) = [[c,0,s],[0,1,0],[-s,0,c]]. For positive t this rotates +x toward -z.
     """
-    c, s = np.cos(t), np.sin(t)
+    c, s = np.cos(t_rad), np.sin(t_rad)
     return np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]], dtype=np.float64)
 
 
-def rot_z(t: float) -> np.ndarray:
-    """Rotation by angle t (radians) about the +z axis. Returns (3,3) float64.
+def rot_z(t_rad: float) -> np.ndarray:
+    """Rotation by angle t_rad (radians) about the +z axis. Returns (3,3) float64.
 
     Rz(t) = [[c,-s,0],[s,c,0],[0,0,1]]. For positive t this rotates +x toward +y.
     """
-    c, s = np.cos(t), np.sin(t)
+    c, s = np.cos(t_rad), np.sin(t_rad)
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
 
 
-def R_wc(yaw: float, pitch_down: float) -> np.ndarray:
+def R_wc(yaw_rad: float, pitch_down_rad: float) -> np.ndarray:
     """Rotation mapping camera-optical-frame vectors to world-frame vectors.
 
     Args:
-        yaw: heading in radians about world +z; 0 looks along world +x, +pi/2 along +y.
-        pitch_down: tilt in radians; positive tilts the optical axis toward world -z.
+        yaw_rad: heading in radians about world +z; 0 looks along world +x, +pi/2 along +y.
+        pitch_down_rad: tilt in radians; positive tilts the optical axis toward world -z.
 
     Returns:
         (3,3) float64 rotation R_wc = Rz(yaw) @ Ry(pitch_down) @ R_BASE.
     """
-    return rot_z(yaw) @ rot_y(pitch_down) @ R_BASE
+    return rot_z(yaw_rad) @ rot_y(pitch_down_rad) @ R_BASE
 
 
-def T_world_cam(position_xyz: np.ndarray, yaw: float, pitch_down: float) -> np.ndarray:
+def T_world_cam(position_xyz: np.ndarray, yaw_rad: float, pitch_down_rad: float) -> np.ndarray:
     """Homogeneous transform mapping camera-optical-frame points to world points.
 
     Args:
         position_xyz: camera optical centre in world coordinates, metres, shape (3,).
-        yaw: radians, see R_wc.
-        pitch_down: radians, see R_wc.
+        yaw_rad: radians, see R_wc.
+        pitch_down_rad: radians, see R_wc.
 
     Returns:
         (4,4) float64 matrix [[R_wc, p], [0, 0, 0, 1]].
@@ -73,7 +73,7 @@ def T_world_cam(position_xyz: np.ndarray, yaw: float, pitch_down: float) -> np.n
     if p.shape != (3,):
         raise ValueError(f"position_xyz must have shape (3,), got {p.shape}")
     T = np.eye(4, dtype=np.float64)
-    T[:3, :3] = R_wc(yaw, pitch_down)
+    T[:3, :3] = R_wc(yaw_rad, pitch_down_rad)
     T[:3, 3] = p
     return T
 

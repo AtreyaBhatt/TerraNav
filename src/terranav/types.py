@@ -6,7 +6,10 @@ These classes hold data plus small validation/conversion helpers only.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
 import numpy as np
 
@@ -28,6 +31,13 @@ def _focal_from_hfov(width: int, hfov_rad: float) -> float:
 _DEFAULT_F = _focal_from_hfov(DEFAULT_IMAGE_WIDTH, DEFAULT_HFOV_RAD)
 
 
+def _readonly_copy(arr, dtype) -> np.ndarray:
+    """Copy `arr` as `dtype` and mark it read-only, so frozen dataclasses own immutable data."""
+    out = np.array(arr, dtype=dtype, copy=True)
+    out.setflags(write=False)
+    return out
+
+
 @dataclass(frozen=True, slots=True)
 class GridSpec:
     """Regular 2D grid over the world x-y plane.
@@ -41,10 +51,10 @@ class GridSpec:
     Cell (iy, ix) has its centre at origin + ((ix + 0.5) * res, (iy + 0.5) * res).
     """
 
-    resolution: float = 0.05
-    size_x: float = 12.0
-    size_y: float = 12.0
-    origin: tuple[float, float] = (0.0, 0.0)
+    resolution: float
+    size_x: float
+    size_y: float
+    origin: tuple[float, float]
 
     def __post_init__(self) -> None:
         if self.resolution <= 0:
@@ -66,8 +76,8 @@ class GridSpec:
         """Number of rows (cells along world y)."""
         return round(self.size_y / self.resolution)
 
-    def world_to_cell(self, x, y) -> tuple[np.ndarray, np.ndarray]:
-        """World (x, y) metres -> integer cell indices (iy, ix), i.e. (row, col).
+    def xy_to_rc(self, x, y) -> tuple[np.ndarray, np.ndarray]:
+        """World (x, y) metres -> integer cell indices (row, col) = (iy, ix).
 
         Accepts scalars or arrays. No clipping: out-of-grid points give out-of-range
         indices; callers decide how to handle them.
@@ -76,10 +86,10 @@ class GridSpec:
         iy = np.floor((np.asarray(y, dtype=np.float64) - self.origin[1]) / self.resolution)
         return iy.astype(np.int64), ix.astype(np.int64)
 
-    def cell_to_world(self, iy, ix) -> tuple[np.ndarray, np.ndarray]:
-        """Cell indices (iy, ix), i.e. (row, col) -> world (x, y) of the cell centre, metres."""
-        x = self.origin[0] + (np.asarray(ix, dtype=np.float64) + 0.5) * self.resolution
-        y = self.origin[1] + (np.asarray(iy, dtype=np.float64) + 0.5) * self.resolution
+    def rc_to_xy(self, row, col) -> tuple[np.ndarray, np.ndarray]:
+        """Cell indices (row, col) = (iy, ix) -> world (x, y) of the cell centre, metres."""
+        x = self.origin[0] + (np.asarray(col, dtype=np.float64) + 0.5) * self.resolution
+        y = self.origin[1] + (np.asarray(row, dtype=np.float64) + 0.5) * self.resolution
         return x, y
 
 
@@ -123,6 +133,7 @@ class SensorConfig:
     """Simulated depth sensor parameters. Angles in radians, distances in metres.
 
     Noise model: sigma(depth_z) = noise_s0_m + noise_s1_per_m * depth_z**2 (illustrative).
+    Validity cut-off: max_depth_z_m applies to depth_z (camera-frame z), NOT range_t.
     """
 
     width: int = DEFAULT_IMAGE_WIDTH
@@ -130,7 +141,7 @@ class SensorConfig:
     hfov_rad: float = DEFAULT_HFOV_RAD
     mount_height_m: float = 0.5
     pitch_down_rad: float = DEFAULT_PITCH_DOWN_RAD
-    max_range_m: float = 8.0
+    max_depth_z_m: float = 8.0
     noise_s0_m: float = 0.001
     noise_s1_per_m: float = 0.0015
     dropout_prob: float = 0.02
@@ -139,8 +150,8 @@ class SensorConfig:
     def __post_init__(self) -> None:
         if not 0.0 <= self.dropout_prob <= 1.0:
             raise ValueError(f"dropout_prob must be in [0, 1], got {self.dropout_prob}")
-        if self.max_range_m <= 0:
-            raise ValueError(f"max_range_m must be > 0, got {self.max_range_m}")
+        if self.max_depth_z_m <= 0:
+            raise ValueError(f"max_depth_z_m must be > 0, got {self.max_depth_z_m}")
         if not 0.0 < self.hfov_rad < math.pi:
             raise ValueError(f"hfov_rad must be in (0, pi), got {self.hfov_rad}")
 
@@ -179,11 +190,34 @@ class World:
     seed: int
 
     def __post_init__(self) -> None:
-        if self.heightfield.dtype != np.float64:
-            raise ValueError(f"heightfield must be float64, got {self.heightfield.dtype}")
+        heightfield = _readonly_copy(self.heightfield, np.float64)
         expected = (self.grid.ny, self.grid.nx)
-        if self.heightfield.shape != expected:
-            raise ValueError(f"heightfield shape {self.heightfield.shape} != (ny, nx) {expected}")
+        if heightfield.shape != expected:
+            raise ValueError(f"heightfield shape {heightfield.shape} != (ny, nx) {expected}")
+        object.__setattr__(self, "heightfield", heightfield)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class Scenario:
+    """A generated world plus navigation task.
+
+    start_xy, goal_xy: world (x, y) in metres. params: read-only mapping of the sampled
+    generator parameters, for logging/reproduction. family and seed must match `world`.
+    """
+
+    world: World
+    start_xy: tuple[float, float]
+    goal_xy: tuple[float, float]
+    family: str
+    seed: int
+    params: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if (self.family, self.seed) != (self.world.family, self.world.seed):
+            raise ValueError("Scenario family/seed must match its World")
+        object.__setattr__(self, "start_xy", (float(self.start_xy[0]), float(self.start_xy[1])))
+        object.__setattr__(self, "goal_xy", (float(self.goal_xy[0]), float(self.goal_xy[1])))
+        object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -199,10 +233,12 @@ class DepthFrame:
     T_world_cam: np.ndarray
 
     def __post_init__(self) -> None:
-        if self.depth_z.dtype != np.float32:
-            raise ValueError(f"depth_z must be float32, got {self.depth_z.dtype}")
+        depth_z = _readonly_copy(self.depth_z, np.float32)
         expected = (self.intrinsics.height, self.intrinsics.width)
-        if self.depth_z.shape != expected:
-            raise ValueError(f"depth_z shape {self.depth_z.shape} != (H, W) {expected}")
-        if self.T_world_cam.shape != (4, 4) or self.T_world_cam.dtype != np.float64:
-            raise ValueError("T_world_cam must be a (4,4) float64 array")
+        if depth_z.shape != expected:
+            raise ValueError(f"depth_z shape {depth_z.shape} != (H, W) {expected}")
+        T = _readonly_copy(self.T_world_cam, np.float64)
+        if T.shape != (4, 4):
+            raise ValueError(f"T_world_cam must have shape (4,4), got {T.shape}")
+        object.__setattr__(self, "depth_z", depth_z)
+        object.__setattr__(self, "T_world_cam", T)

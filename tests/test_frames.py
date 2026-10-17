@@ -19,9 +19,11 @@ def unit(v: np.ndarray) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
-def world_dir_of_pixel(intr: CameraIntrinsics, yaw: float, pitch: float, u: int, v: int):
+def world_dir_of_pixel(
+    intr: CameraIntrinsics, yaw_rad: float, pitch_down_rad: float, u: int, v: int
+):
     rays = pixel_rays_cam(intr)
-    return unit(R_wc(yaw, pitch) @ rays[v, u])
+    return unit(R_wc(yaw_rad, pitch_down_rad) @ rays[v, u])
 
 
 # --- Orientation -------------------------------------------------------------
@@ -53,11 +55,11 @@ def test_yaw_90deg_optical_axis_is_world_y():
 
 
 @given(
-    yaw=st.floats(min_value=-math.pi, max_value=math.pi),
-    pitch=st.floats(min_value=-math.pi / 2, max_value=math.pi / 2),
+    yaw_rad=st.floats(min_value=-math.pi, max_value=math.pi),
+    pitch_down_rad=st.floats(min_value=-math.pi / 2, max_value=math.pi / 2),
 )
-def test_R_wc_is_proper_rotation(yaw, pitch):
-    R = R_wc(yaw, pitch)
+def test_R_wc_is_proper_rotation(yaw_rad, pitch_down_rad):
+    R = R_wc(yaw_rad, pitch_down_rad)
     assert R.dtype == np.float64
     np.testing.assert_allclose(R.T @ R, np.eye(3), atol=1e-12)
     assert np.linalg.det(R) == pytest.approx(1.0, abs=1e-12)
@@ -152,46 +154,65 @@ def test_from_hfov_default_camera():
 
 
 def test_gridspec_derived_sizes():
-    g = GridSpec(resolution=0.05, size_x=12.0, size_y=6.0)
+    g = GridSpec(resolution=0.05, size_x=12.0, size_y=6.0, origin=(0.0, 0.0))
     assert (g.nx, g.ny) == (240, 120)
-    assert (GridSpec(resolution=0.1).nx, GridSpec(resolution=0.1).ny) == (120, 120)
 
 
-def test_gridspec_cell_to_world_to_cell_round_trip():
+def test_terrain_and_map_grids_differ():
+    # Guard against confusing the 0.05 m terrain grid with the 0.1 m map grid.
+    terrain = GridSpec(resolution=0.05, size_x=12.0, size_y=12.0, origin=(0.0, 0.0))
+    map_grid = GridSpec(resolution=0.1, size_x=12.0, size_y=12.0, origin=(0.0, 0.0))
+    assert (terrain.ny, terrain.nx) == (240, 240)
+    assert (map_grid.ny, map_grid.nx) == (120, 120)
+    assert terrain.nx != map_grid.nx
+    assert terrain.ny != map_grid.ny
+
+
+def test_gridspec_rc_to_xy_to_rc_round_trip():
     g = GridSpec(resolution=0.05, size_x=12.0, size_y=6.0, origin=(-1.0, 2.0))
-    iy, ix = np.meshgrid(np.arange(g.ny), np.arange(g.nx), indexing="ij")
-    x, y = g.cell_to_world(iy, ix)
-    iy2, ix2 = g.world_to_cell(x, y)
-    np.testing.assert_array_equal(iy2, iy)
-    np.testing.assert_array_equal(ix2, ix)
+    row, col = np.meshgrid(np.arange(g.ny), np.arange(g.nx), indexing="ij")
+    x, y = g.rc_to_xy(row, col)
+    row2, col2 = g.xy_to_rc(x, y)
+    np.testing.assert_array_equal(row2, row)
+    np.testing.assert_array_equal(col2, col)
 
 
-def test_gridspec_world_to_cell_known_values():
-    g = GridSpec(resolution=0.05, size_x=12.0, size_y=12.0)
-    # x=0.12 -> ix=2 (0.10..0.15); y=0.07 -> iy=1 (0.05..0.10).
-    iy, ix = g.world_to_cell(0.12, 0.07)
-    assert (int(iy), int(ix)) == (1, 2)
-    x, y = g.cell_to_world(1, 2)
+def test_gridspec_xy_to_rc_known_values():
+    g = GridSpec(resolution=0.05, size_x=12.0, size_y=12.0, origin=(0.0, 0.0))
+    # x=0.12 -> col=2 (0.10..0.15); y=0.07 -> row=1 (0.05..0.10).
+    row, col = g.xy_to_rc(0.12, 0.07)
+    assert (int(row), int(col)) == (1, 2)
+    x, y = g.rc_to_xy(1, 2)
     assert float(x) == pytest.approx(0.125)
     assert float(y) == pytest.approx(0.075)
 
 
-def test_gridspec_world_to_cell_to_world_within_half_cell():
-    g = GridSpec(resolution=0.1, size_x=12.0, size_y=12.0)
+def test_gridspec_xy_to_rc_to_xy_within_half_cell():
+    g = GridSpec(resolution=0.1, size_x=12.0, size_y=12.0, origin=(0.0, 0.0))
     rng = np.random.default_rng(0)
     pts = rng.uniform(0.0, 12.0, size=(1000, 2))
-    x, y = g.cell_to_world(*g.world_to_cell(pts[:, 0], pts[:, 1]))
+    x, y = g.rc_to_xy(*g.xy_to_rc(pts[:, 0], pts[:, 1]))
     assert np.all(np.abs(x - pts[:, 0]) <= 0.05 + 1e-12)
     assert np.all(np.abs(y - pts[:, 1]) <= 0.05 + 1e-12)
 
 
 def test_world_accepts_matching_shape():
-    g = GridSpec(resolution=0.5, size_x=4.0, size_y=2.0)
+    g = GridSpec(resolution=0.5, size_x=4.0, size_y=2.0, origin=(0.0, 0.0))
     w = World(np.zeros((4, 8)), g, (), "flat", 0)
     assert w.heightfield.shape == (g.ny, g.nx)
 
 
 def test_world_rejects_wrong_shape():
-    g = GridSpec(resolution=0.5, size_x=4.0, size_y=2.0)  # (ny, nx) = (4, 8)
+    g = GridSpec(resolution=0.5, size_x=4.0, size_y=2.0, origin=(0.0, 0.0))  # (ny, nx) = (4, 8)
     with pytest.raises(ValueError, match="shape"):
         World(np.zeros((8, 4)), g, (), "flat", 0)
+
+
+def test_world_heightfield_is_read_only_copy():
+    g = GridSpec(resolution=0.5, size_x=4.0, size_y=2.0, origin=(0.0, 0.0))
+    src = np.zeros((4, 8))
+    w = World(src, g, (), "flat", 0)
+    src[0, 0] = 1.0  # mutating the caller's array must not leak into the World
+    assert w.heightfield[0, 0] == 0.0
+    with pytest.raises(ValueError):
+        w.heightfield[0, 0] = 1.0

@@ -45,12 +45,13 @@ def test_frustum_corners_orientation():
 
 def test_every_pose_gets_its_own_actors(offscreen_gl):
     sc = generate_scenario("mixed", 0)
-    poses = scan_poses(sc, k=6)
+    poses = scan_poses(sc)
     pl = pv.Plotter(off_screen=True, window_size=[64, 64])
     points = [np.zeros((0, 3)) for _ in poses]
     _populate(pl, sc, poses, points, SensorConfig().intrinsics())
     names = set(pl.actors)
-    for i in range(6):
+    assert len(poses) == 7
+    for i in range(len(poses)):
         assert f"frustum_{i}" in names and f"axis_{i}" in names
     assert {"terrain", "start", "goal"} <= names
     assert {f"box_{j}" for j in range(len(sc.world.boxes))} <= names
@@ -59,7 +60,7 @@ def test_every_pose_gets_its_own_actors(offscreen_gl):
 
 def test_render_scene_writes_both_views(tmp_path, offscreen_gl):
     sc = generate_scenario("mixed", 0)
-    poses = scan_poses(sc, k=6)
+    poses = scan_poses(sc)
     rng = np.random.default_rng(0)
     points = [rng.uniform(0, 12, size=(50, 3)) for _ in poses]
     oblique, top = render_scene(sc, poses, points, tmp_path / "scene.png", window_size=(320, 200))

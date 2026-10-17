@@ -13,7 +13,7 @@ import numpy as np
 from scipy import ndimage
 
 from terranav.sim.scenario import easy_mask
-from terranav.sim.world import cell_centers_xy
+from terranav.sim.world import cell_centers_xy, coarsen_factor
 from terranav.types import GridSpec, Scenario
 
 CORRIDOR_HALF_WIDTH_M = 3.0
@@ -64,13 +64,7 @@ def reachable_mask(scenario: Scenario, map_grid: GridSpec) -> np.ndarray:
     multiple of the terrain resolution, with the same origin and extent).
     """
     tgrid = scenario.world.grid
-    f = round(map_grid.resolution / tgrid.resolution)
-    if (
-        abs(f * tgrid.resolution - map_grid.resolution) > 1e-9
-        or (map_grid.ny * f, map_grid.nx * f) != (tgrid.ny, tgrid.nx)
-        or map_grid.origin != tgrid.origin
-    ):
-        raise ValueError("map grid must be an integer coarsening of the terrain grid")
+    f = coarsen_factor(tgrid, map_grid)
     four_connected = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
     labels, _ = ndimage.label(easy_mask(scenario), structure=four_connected)
     r, c = tgrid.xy_to_rc(*scenario.start_xy)

@@ -22,8 +22,7 @@ ROUGH_TAPER_FRACTION = 0.2
 
 def cell_centers_xy(grid: GridSpec) -> tuple[np.ndarray, np.ndarray]:
     """World (x, y) of every cell centre, metres; each array has shape (ny, nx)."""
-    row, col = np.meshgrid(np.arange(grid.ny), np.arange(grid.nx), indexing="ij")
-    return grid.rc_to_xy(row, col)
+    return grid.cell_centers_xy()
 
 
 def bilinear_sample(field: np.ndarray, grid: GridSpec, x, y) -> np.ndarray:
@@ -38,6 +37,23 @@ def bilinear_sample(field: np.ndarray, grid: GridSpec, x, y) -> np.ndarray:
     row = (y - grid.origin[1]) / grid.resolution - 0.5
     coords = np.stack([np.ravel(row), np.ravel(col)])
     return ndimage.map_coordinates(field, coords, order=1, mode="nearest").reshape(np.shape(x))
+
+
+def coarsen_factor(fine: GridSpec, coarse: GridSpec) -> int:
+    """Integer f such that each `coarse` cell is exactly f x f `fine` cells.
+
+    Raises ValueError unless both grids share origin and extent and the coarse resolution is
+    an integer multiple of the fine one.
+    """
+    f = round(coarse.resolution / fine.resolution)
+    if (
+        f < 1
+        or abs(f * fine.resolution - coarse.resolution) > 1e-9
+        or (coarse.ny * f, coarse.nx * f) != (fine.ny, fine.nx)
+        or coarse.origin != fine.origin
+    ):
+        raise ValueError("coarse grid must be an integer coarsening of the fine grid")
+    return f
 
 
 def _check_hf(hf: np.ndarray, grid: GridSpec) -> np.ndarray:

@@ -21,6 +21,17 @@ hypothesis, ruff. Managed with uv. NO ROS, Gazebo, GPU libs, Rust, Open3D, torch
 - Every angle parameter name carries a unit suffix (_rad/_deg), e.g. yaw_rad, slope_deg.
 - Do not touch files outside the current step except for imports/stubs.
 
+## Architecture rule: sensor boundary
+- Perception (`src/terranav/perception/`) consumes ONLY `DepthFrame`s (depth image +
+  intrinsics + known pose), known robot poses, and the sensor noise model
+  (`terranav.sensor_model`). It never imports `terranav.sim` (enforced by
+  tests/test_architecture.py) and never sees ground truth, ideal depth or noise draws.
+- Anything the robot knows by other means (e.g. footprint heights from proprioception) is
+  passed in by the caller, explicitly.
+- `DepthFrame` is the extension point for future sensors: RGB depth estimation, stereo,
+  lidar. A new sensor must produce DepthFrames (or a sibling type) without changing
+  perception's inputs.
+
 ## Frame conventions (authoritative; see docs/frames.md)
 - World: x forward, y left, z up. Origin at map corner; x, y in [0, 12] m.
 - Camera optical: x right, y down, z forward. Pixel u right, v down.

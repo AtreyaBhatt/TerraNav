@@ -21,6 +21,10 @@ from terranav.types import CameraIntrinsics, GridSpec, Scenario, SensorConfig, W
 TERRAIN_MESH_STEP_M = 0.1  # terrain mesh is block-averaged to this spacing for speed
 TERRAIN_OPACITY = 0.6
 FRUSTUM_DEPTH_M = 0.4  # drawn frustum length along the optical axis
+# One dark neutral colour for all frusta/axes, so they stand out from the frame-coloured
+# points they sit in front of.
+POSE_COLOUR = "#262626"
+POSE_LINE_WIDTH = 3
 AXIS_ARROW_M = 0.6
 MARKER_RADIUS_M = 0.15
 WINDOW_SIZE = (1600, 1000)
@@ -135,10 +139,10 @@ def _populate(
     # Explicit unique names: PyVista's default actor names derive from VTK memory addresses,
     # and adding a mesh under an existing name replaces that actor.
     for i, T in enumerate(poses):
-        colour = colours(i % 10)[:3]
-        pl.add_mesh(_frustum_lines(T, intrinsics), name=f"frustum_{i}", color=colour, line_width=3)
+        frustum = _frustum_lines(T, intrinsics)
+        pl.add_mesh(frustum, name=f"frustum_{i}", color=POSE_COLOUR, line_width=POSE_LINE_WIDTH)
         arrow = pv.Arrow(start=T[:3, 3], direction=T[:3, 2], scale=AXIS_ARROW_M)
-        pl.add_mesh(arrow, name=f"axis_{i}", color=colour)
+        pl.add_mesh(arrow, name=f"axis_{i}", color=POSE_COLOUR)
 
     markers = (("start", scenario.start_xy, "limegreen"), ("goal", scenario.goal_xy, "gold"))
     for name, (x, y), colour in markers:

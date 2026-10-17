@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from scipy import ndimage
 
 from terranav.config import SimConfig
+from terranav.perception.backproject import backproject
 from terranav.sim.scenario import (
     FAMILIES,
     POSE_CLEARANCE_M,
@@ -366,7 +367,7 @@ def test_flank_poses_on_flat_ground():
     # line fractions 0.1, 0.45, 0.8 -> x = 2, 5.5, 9. Left row (y = 8.5) yaws -30 deg (toward
     # the line), right row (y = 3.5) +30 deg. Order: by fraction, left before right.
     sc = Scenario(World(zeros(), GRID, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
-    poses = scan_poses(sc)  # default strategy is "flank"
+    poses = scan_poses(sc, strategy="flank")
     expected_xy = [(2.0, 8.5), (2.0, 3.5), (5.5, 8.5), (5.5, 3.5), (9.0, 8.5), (9.0, 3.5)]
     p = math.radians(25.0)
     for i, (T, (x, y)) in enumerate(zip(poses, expected_xy, strict=True)):
@@ -392,8 +393,8 @@ def clearance_ok(sc, x: float, y: float) -> bool:
 @pytest.mark.parametrize("seed", SEEDS_50)
 def test_flank_poses_placed_on_clear_easy_ground(family, seed):
     sc = generate_scenario(family, seed, CFG)
-    poses = scan_poses(sc)  # must not raise
-    assert len(poses) == 6
+    poses = scan_poses(sc)  # default "flank+start"; must not raise
+    assert len(poses) == 7
     for T in poses:
         x, y, z = T[:3, 3]
         assert clearance_ok(sc, x, y)
@@ -412,3 +413,40 @@ def test_capture_succeeds_from_every_flank_pose(family, seed):
     for i, T in enumerate(scan_poses(sc, sensor=sensor)):
         frame, _ = capture(sc.world, T, sensor, np.random.default_rng((seed, i)))
         assert np.isfinite(frame.depth_z).any()
+
+
+def test_flank_plus_start_poses():
+    # Default strategy: frame 0 at the start (yaw toward the goal, 0.5 m up), then "flank".
+    sc = Scenario(World(zeros(), GRID, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
+    poses = scan_poses(sc)
+    assert len(poses) == 7
+    p = math.radians(25.0)
+    np.testing.assert_allclose(poses[0][:3, 3], [1.0, 6.0, 0.5], atol=1e-12)
+    np.testing.assert_allclose(poses[0][:3, 2], [math.cos(p), 0.0, -math.sin(p)], atol=1e-12)
+    for a, b in zip(poses[1:], scan_poses(sc, strategy="flank"), strict=True):
+        np.testing.assert_array_equal(a, b)
+    with pytest.raises(ValueError):
+        scan_poses(sc, k=6)  # flank+start needs an odd k
+
+
+def test_start_pose_sees_ground_next_to_footprint():
+    # Flat ground, camera 0.5 m up, pitch 25 deg. The bottom image row (v = H - 1) looks
+    # 25 deg + atan(((H - 1) - cy) / fy) below the horizon, with fy = (W/2) / tan(hfov/2), so
+    # the nearest visible ground lies d = 0.5 / tan(that) ahead: ~0.285 m for 320 x 240 and
+    # 87 deg. On flat ground every pixel of a row shares the same forward distance.
+    sensor = SensorConfig(noise_s0_m=0.0, noise_s1_per_m=0.0, dropout_prob=0.0)
+    fy = (sensor.width / 2) / math.tan(sensor.hfov_rad / 2)
+    cy = (sensor.height - 1) / 2
+    dip = sensor.pitch_down_rad + math.atan((sensor.height - 1 - cy) / fy)
+    d_near = 0.5 / math.tan(dip)
+    assert d_near == pytest.approx(0.285, abs=0.001)
+    sc = Scenario(World(zeros(), GRID, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
+    T = scan_poses(sc, sensor=sensor)[0]
+    frame, _ = capture(sc.world, T, sensor, np.random.default_rng((0, 0)))
+    points, _ = backproject(frame)
+    assert (points[:, 0] - 1.0).min() == pytest.approx(d_near, abs=1e-3)
+    # So the ground just beyond a 0.4 m footprint is observed: map cells (0.1 m) centred
+    # 0.45 and 0.55 m ahead, at y = 5.95 and 6.05.
+    for x, y in ((1.45, 5.95), (1.45, 6.05), (1.55, 5.95), (1.55, 6.05)):
+        near = (np.abs(points[:, 0] - x) <= 0.05) & (np.abs(points[:, 1] - y) <= 0.05)
+        assert near.any(), (x, y)

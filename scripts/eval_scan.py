@@ -29,9 +29,8 @@ from pathlib import Path
 import numpy as np
 
 from terranav.sim.scan_eval import run_jobs
-from terranav.sim.scenario import FAMILIES, SCAN_STRATEGIES
+from terranav.sim.scenario import DEFAULT_SCAN_K, FAMILIES, SCAN_STRATEGIES
 
-K = 6
 OUT = Path("out/eval_scan.txt")
 
 
@@ -52,14 +51,15 @@ def table(results: list[dict], seeds: int, workers: int, wall_s: float) -> str:
         "# TerraNav scan coverage evaluation (measured)",
         f"# git: {git_version()}",
         f"# date: {dt.datetime.now().isoformat(timespec='seconds')}",
-        f"# seeds 0..{seeds - 1}, k = {K} poses, default SensorConfig, 0.1 m map grid",
+        (
+            f"# seeds 0..{seeds - 1}, poses per strategy {DEFAULT_SCAN_K}, default SensorConfig, "
+            "0.1 m map grid"
+        ),
         f"# {len(results)} jobs, {workers} worker(s), wall time {wall_s:.1f} s",
         "# coverage = fraction of region cells with >= 1 backprojected point",
         "",
-        (
-            f"{'family':<15} {'region':<10} {'flank mean':>10} {'flank min':>10} "
-            f"{'line mean':>10} {'line min':>10}"
-        ),
+        f"{'family':<15} {'region':<10}"
+        + "".join(f" {st + ' mean':>17} {st + ' min':>16}" for st in SCAN_STRATEGIES),
     ]
     for family in FAMILIES:
         for region in ("corridor", "reachable"):
@@ -70,13 +70,14 @@ def table(results: list[dict], seeds: int, workers: int, wall_s: float) -> str:
                     for r in results
                     if r["family"] == family and r["strategy"] == strategy
                 ]
-                row += f" {np.mean(vals):>10.3f} {np.min(vals):>10.3f}"
+                row += f" {np.mean(vals):>17.3f} {np.min(vals):>16.3f}"
             lines.append(row)
-    lines += ["", f"line strategy skipped poses (of {K} per scenario, {seeds} scenarios):"]
+    k_line = DEFAULT_SCAN_K["line"]
+    lines += ["", f"line strategy skipped poses (of {k_line} per scenario, {seeds} scenarios):"]
     for family in FAMILIES:
         skips = [r["skipped"] for r in results if r["family"] == family and r["strategy"] == "line"]
         lines.append(
-            f"  {family:<15} total {sum(skips):>3} / {K * seeds}, "
+            f"  {family:<15} total {sum(skips):>3} / {k_line * seeds}, "
             f"scenarios with >= 1 skip: {sum(s > 0 for s in skips)}, max per scenario: {max(skips)}"
         )
     return "\n".join(lines) + "\n"
@@ -95,7 +96,7 @@ def main() -> None:
         print(f"\r  {done}/{total} jobs done", end="" if done < total else "\n", flush=True)
 
     t0 = time.perf_counter()
-    results = run_jobs(jobs, args.workers, k=K, progress=progress)
+    results = run_jobs(jobs, args.workers, progress=progress)
     wall_s = time.perf_counter() - t0
 
     text = table(results, args.seeds, args.workers, wall_s)

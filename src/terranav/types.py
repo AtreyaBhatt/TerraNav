@@ -92,6 +92,11 @@ class GridSpec:
         y = self.origin[1] + (np.asarray(row, dtype=np.float64) + 0.5) * self.resolution
         return x, y
 
+    def cell_centers_xy(self) -> tuple[np.ndarray, np.ndarray]:
+        """World (x, y) of every cell centre, metres; each array has shape (ny, nx)."""
+        row, col = np.meshgrid(np.arange(self.ny), np.arange(self.nx), indexing="ij")
+        return self.rc_to_xy(row, col)
+
 
 @dataclass(frozen=True, slots=True)
 class CameraIntrinsics:

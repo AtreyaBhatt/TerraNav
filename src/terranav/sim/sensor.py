@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from terranav.sensor_model import noise_sigma
 from terranav.sim.raycast import RaycastResult, cast_frame, range_to_depth, unit_rays_cam
 from terranav.types import CameraIntrinsics, DepthFrame, SensorConfig, World
 
@@ -56,11 +57,6 @@ class SensorDebug:
             arr = np.array(getattr(self, name), dtype=dtype, copy=True)
             arr.setflags(write=False)
             object.__setattr__(self, name, arr)
-
-
-def noise_sigma(depth_z: np.ndarray, cfg: SensorConfig) -> np.ndarray:
-    """Axial noise std (metres) at camera depth depth_z (metres): s0 + s1 * depth_z^2."""
-    return cfg.noise_s0_m + cfg.noise_s1_per_m * np.square(depth_z)
 
 
 def simulate_depth(

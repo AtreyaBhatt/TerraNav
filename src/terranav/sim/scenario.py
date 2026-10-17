@@ -349,7 +349,8 @@ def easy_mask(scenario: Scenario) -> np.ndarray:
 
 # --- Scan poses -------------------------------------------------------------------
 
-SCAN_STRATEGIES = ("flank", "line")
+SCAN_STRATEGIES = ("flank+start", "flank", "line")
+DEFAULT_SCAN_K = {"flank+start": 7, "flank": 6, "line": 6}  # poses per strategy if k is None
 # Flank survey STARTING VALUES, to be tuned against measured coverage (scripts/eval_scan.py).
 FLANK_LATERAL_OFFSET_M = 2.5  # d_lat: distance of each row from the start->goal line
 FLANK_TOE_IN_DEG = 30.0  # theta_in: rows look this far inward from the line's heading
@@ -393,8 +394,8 @@ def _camera_pose(scenario: Scenario, x: float, y: float, yaw_rad: float, sensor)
 # TODO(M2): revisit scan strategy (this is a survey pass with known poses).
 def scan_poses(
     scenario: Scenario,
-    k: int = 6,
-    strategy: str = "flank",
+    k: int | None = None,
+    strategy: str = "flank+start",
     sensor: SensorConfig | None = None,
     d_lat_m: float = FLANK_LATERAL_OFFSET_M,
     theta_in_deg: float = FLANK_TOE_IN_DEG,
@@ -405,7 +406,10 @@ def scan_poses(
     down by sensor.pitch_down_rad. With psi the heading of the start->goal line and n_hat its
     left normal:
 
-    "flank" (default): two rows of k/2 poses at lateral offsets +d_lat_m (left) and -d_lat_m
+    "flank+start" (default, k = 7): one pose at the start (yaw psi), then the k - 1 poses of
+      "flank". The start pose sees the ground next to the robot's footprint, which no flank
+      pose does; frame 0 is the start pose.
+    "flank" (k = 6): two rows of k/2 poses at lateral offsets +d_lat_m (left) and -d_lat_m
       (right) from the line, at along-line fractions linspace(0.1, 0.8, k/2) (0.1, 0.45, 0.8
       for k = 6). Left-row yaw = psi - theta_in, right-row yaw = psi + theta_in (both turned
       toward the line). A pose must lie in pose_ground_mask; otherwise the lateral offset is
@@ -417,16 +421,25 @@ def scan_poses(
       A pose inside a box footprint or off easy_mask is SKIPPED, so k - len(result) poses
       were skipped.
 
+    k counts ALL poses; None selects DEFAULT_SCAN_K[strategy].
     Frame i is captured with the per-frame generator np.random.default_rng((scenario.seed, i)).
     """
     if strategy not in SCAN_STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r}; expected one of {SCAN_STRATEGIES}")
+    k = DEFAULT_SCAN_K[strategy] if k is None else k
     sensor = sensor if sensor is not None else SensorConfig()
     s, g = np.asarray(scenario.start_xy), np.asarray(scenario.goal_xy)
     t_hat = (g - s) / np.linalg.norm(g - s)
     n_hat = np.array([-t_hat[1], t_hat[0]])  # left of the start->goal heading
     psi = math.atan2(t_hat[1], t_hat[0])
     world = scenario.world
+
+    if strategy == "flank+start":
+        if k < 3 or k % 2 == 0:
+            raise ValueError(f"flank+start needs an odd k >= 3 (start + even flank), got {k}")
+        start_pose = _camera_pose(scenario, *s, psi, sensor)
+        flank = scan_poses(scenario, k - 1, "flank", sensor, d_lat_m, theta_in_deg)
+        return [start_pose, *flank]
 
     if strategy == "line":
         if k < 2:

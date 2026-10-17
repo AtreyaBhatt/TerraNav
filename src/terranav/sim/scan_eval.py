@@ -17,7 +17,7 @@ import numpy as np
 from terranav.config import SimConfig
 from terranav.perception.backproject import backproject
 from terranav.sim.coverage import corridor_mask, coverage, reachable_mask
-from terranav.sim.scenario import generate_scenario, scan_poses
+from terranav.sim.scenario import DEFAULT_SCAN_K, generate_scenario, scan_poses
 from terranav.sim.sensor import capture
 from terranav.types import SensorConfig
 
@@ -37,12 +37,13 @@ def limit_threads() -> None:
         os.environ[name] = "1"
 
 
-def evaluate_job(job: Job, k: int = 6, sensor: SensorConfig | None = None) -> dict:
+def evaluate_job(job: Job, k: int | None = None, sensor: SensorConfig | None = None) -> dict:
     """Capture every scan pose of one job and measure corridor / reachable coverage."""
     family, seed, strategy = job
     cfg = SimConfig()
     sensor = sensor if sensor is not None else cfg.sensor
     sc = generate_scenario(family, seed, cfg)
+    k = DEFAULT_SCAN_K[strategy] if k is None else k
     poses = scan_poses(sc, k=k, strategy=strategy, sensor=sensor)
     points = []
     for i, T in enumerate(poses):
@@ -58,18 +59,17 @@ def evaluate_job(job: Job, k: int = 6, sensor: SensorConfig | None = None) -> di
     }
 
 
-def run_jobs(
+def run_parallel(
+    fn: Callable[[Job], dict],
     jobs: Sequence[Job],
     workers: int,
-    k: int = 6,
-    sensor: SensorConfig | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
-    """Evaluate jobs (in input order). workers == 1 runs serially in this process.
+    """Apply a picklable fn to every job; results in input order. workers == 1 is serial.
 
-    progress(done, total) is called after each finished job, if given.
+    Jobs must be self-contained (own scenario, own per-frame generators), so the result does
+    not depend on workers. progress(done, total) is called after each finished job, if given.
     """
-    fn = partial(evaluate_job, k=k, sensor=sensor)
     results: list[dict | None] = [None] * len(jobs)
     if workers == 1:
         for i, job in enumerate(jobs):
@@ -84,3 +84,14 @@ def run_jobs(
                 if progress:
                     progress(done, len(jobs))
     return results  # type: ignore[return-value]
+
+
+def run_jobs(
+    jobs: Sequence[Job],
+    workers: int,
+    k: int | None = None,
+    sensor: SensorConfig | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """Scan-coverage evaluation of jobs (see evaluate_job) via run_parallel."""
+    return run_parallel(partial(evaluate_job, k=k, sensor=sensor), jobs, workers, progress)

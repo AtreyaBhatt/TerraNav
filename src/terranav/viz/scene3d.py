@@ -16,7 +16,7 @@ from matplotlib.colors import ListedColormap
 
 from terranav.frames import transform_points
 from terranav.sim.world import bilinear_sample
-from terranav.types import CameraIntrinsics, Scenario, SensorConfig, World
+from terranav.types import CameraIntrinsics, GridSpec, Scenario, SensorConfig, World
 
 TERRAIN_MESH_STEP_M = 0.1  # terrain mesh is block-averaged to this spacing for speed
 TERRAIN_OPACITY = 0.6
@@ -25,12 +25,25 @@ AXIS_ARROW_M = 0.6
 MARKER_RADIUS_M = 0.15
 WINDOW_SIZE = (1600, 1000)
 
-# Fixed view directions: (camera position, focal point, view-up), world metres. Each view is
-# then fitted to the scene bounds with reset_camera(), which keeps the direction, so renders
-# are reproducible for a given scene.
-OBLIQUE_VIEW = [(-4.0, -7.0, 9.0), (6.0, 6.0, 0.0), (0.0, 0.0, 1.0)]
-TOP_VIEW = [(6.0, 6.0, 30.0), (6.0, 6.0, 0.0), (0.0, 1.0, 0.0)]  # +x right, +y up
-OBLIQUE_ZOOM, TOP_ZOOM = 1.6, 1.3  # reset_camera() leaves a generous margin
+# Pinned views, derived only from the map extent so framing is identical across scenes.
+# Oblique: camera behind-left of the map centre (toward -x, -y), looking down at it; the
+# offset is in units of the map size. Top: orthographic, +x right, +y up.
+OBLIQUE_OFFSET = (-0.95, -1.35, 1.15)  # x, y, z offset from the map centre, in map sizes
+TOP_MARGIN = 1.04  # orthographic half-height = TOP_MARGIN * size_y / 2
+
+
+def oblique_view(grid: GridSpec) -> list[tuple[float, float, float]]:
+    """(position, focal point, view-up) for the 3/4 view of a grid's map, metres."""
+    size = max(grid.size_x, grid.size_y)
+    cx, cy = grid.origin[0] + grid.size_x / 2, grid.origin[1] + grid.size_y / 2
+    ox, oy, oz = (size * o for o in OBLIQUE_OFFSET)
+    return [(cx + ox, cy + oy, oz), (cx, cy, 0.0), (0.0, 0.0, 1.0)]
+
+
+def top_view(grid: GridSpec) -> list[tuple[float, float, float]]:
+    """(position, focal point, view-up) looking straight down; +x right, +y up."""
+    cx, cy = grid.origin[0] + grid.size_x / 2, grid.origin[1] + grid.size_y / 2
+    return [(cx, cy, 3.0 * max(grid.size_x, grid.size_y)), (cx, cy, 0.0), (0.0, 1.0, 0.0)]
 
 
 def frustum_corners_world(
@@ -86,6 +99,7 @@ def _populate(
     z_lo, z_hi = float(world.heightfield.min()), float(world.heightfield.max())
     pl.add_mesh(
         terrain_mesh(world),
+        name="terrain",
         scalars="height",
         cmap="Greys",
         clim=(z_lo - 0.1, z_hi + 0.4),
@@ -99,9 +113,10 @@ def _populate(
             "width": 0.04,
         },
     )
-    for b in world.boxes:
+    for j, b in enumerate(world.boxes):
         lo, hi = b.min_xyz, b.max_xyz
-        pl.add_mesh(pv.Box(bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])), color="firebrick")
+        box = pv.Box(bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
+        pl.add_mesh(box, name=f"box_{j}", color="firebrick")
 
     k = len(points_list)
     frames = [i for i in range(k) if len(points_list[i])]
@@ -110,33 +125,39 @@ def _populate(
         cloud["frame"] = np.concatenate([np.full(len(points_list[i]), float(i)) for i in frames])
         pl.add_mesh(
             cloud,
+            name="points",
             scalars="frame",
             cmap=ListedColormap([colours(i % 10) for i in range(k)]),
             clim=(-0.5, k - 0.5),
             point_size=3,
             show_scalar_bar=False,
         )
+    # Explicit unique names: PyVista's default actor names derive from VTK memory addresses,
+    # and adding a mesh under an existing name replaces that actor.
     for i, T in enumerate(poses):
         colour = colours(i % 10)[:3]
-        pl.add_mesh(_frustum_lines(T, intrinsics), color=colour, line_width=3)
+        pl.add_mesh(_frustum_lines(T, intrinsics), name=f"frustum_{i}", color=colour, line_width=3)
         arrow = pv.Arrow(start=T[:3, 3], direction=T[:3, 2], scale=AXIS_ARROW_M)
-        pl.add_mesh(arrow, color=colour)
+        pl.add_mesh(arrow, name=f"axis_{i}", color=colour)
 
-    for (x, y), colour in ((scenario.start_xy, "limegreen"), (scenario.goal_xy, "gold")):
+    markers = (("start", scenario.start_xy, "limegreen"), ("goal", scenario.goal_xy, "gold"))
+    for name, (x, y), colour in markers:
         z = float(bilinear_sample(world.heightfield, world.grid, x, y)) + MARKER_RADIUS_M
-        pl.add_mesh(pv.Sphere(radius=MARKER_RADIUS_M, center=(x, y, z)), color=colour)
+        sphere = pv.Sphere(radius=MARKER_RADIUS_M, center=(x, y, z))
+        pl.add_mesh(sphere, name=name, color=colour)
     if poses:
         legend = [[f"frame {i}", colours(i % 10)[:3]] for i in range(len(poses))]
         pl.add_legend(legend, bcolor="white", face="rectangle", loc="upper right", size=(0.1, 0.15))
     pl.add_axes()
 
 
-def _snapshot(pl: pv.Plotter, view: list, path: Path, parallel: bool, zoom: float) -> None:
-    if parallel:
+def _snapshot(pl: pv.Plotter, view: list, path: Path, parallel_scale: float | None) -> None:
+    """Screenshot from a pinned view; parallel_scale (half-height, m) selects orthographic."""
+    if parallel_scale is not None:
         pl.enable_parallel_projection()
+        pl.camera.parallel_scale = parallel_scale
     pl.camera_position = view
-    pl.reset_camera()  # fit the scene, keeping the view direction
-    pl.camera.zoom(zoom)
+    pl.reset_camera_clipping_range()  # near/far planes only; the view itself stays pinned
     pl.render()
     pl.screenshot(str(path))
 
@@ -165,14 +186,14 @@ def render_scene(
 
     pl = pv.Plotter(off_screen=True, window_size=list(window_size))
     _populate(pl, scenario, poses, points_list, intrinsics)
-    _snapshot(pl, OBLIQUE_VIEW, out_path, parallel=False, zoom=OBLIQUE_ZOOM)
-    _snapshot(pl, TOP_VIEW, top_path, parallel=True, zoom=TOP_ZOOM)
+    grid = scenario.world.grid
+    _snapshot(pl, oblique_view(grid), out_path, parallel_scale=None)
+    _snapshot(pl, top_view(grid), top_path, parallel_scale=TOP_MARGIN * grid.size_y / 2)
     pl.close()
 
     if show:
         viewer = pv.Plotter(window_size=list(window_size))
         _populate(viewer, scenario, poses, points_list, intrinsics)
-        viewer.camera_position = OBLIQUE_VIEW
-        viewer.reset_camera()
+        viewer.camera_position = oblique_view(scenario.world.grid)
         viewer.show()
     return out_path, top_path

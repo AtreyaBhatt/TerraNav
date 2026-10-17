@@ -11,9 +11,16 @@ from hypothesis import strategies as st
 from scipy import ndimage
 
 from terranav.config import SimConfig
-from terranav.sim.scenario import FAMILIES, generate_scenario, scan_poses
+from terranav.sim.scenario import (
+    FAMILIES,
+    POSE_CLEARANCE_M,
+    easy_mask,
+    generate_scenario,
+    scan_poses,
+)
+from terranav.sim.sensor import capture
 from terranav.sim.world import add_ramp, add_rough_patch, add_terrace, box_on_terrain
-from terranav.types import Box, GridSpec, Scenario, World
+from terranav.types import Box, GridSpec, Scenario, SensorConfig, World
 
 CFG = SimConfig()
 GRID = CFG.terrain_grid
@@ -141,33 +148,6 @@ def test_flat_obstacles_has_boxes_and_flat_terrain():
     sc = generate_scenario("flat_obstacles", 0, CFG)
     assert 4 <= len(sc.world.boxes) <= 8
     assert np.all(sc.world.heightfield == 0.0)
-
-
-# ILLUSTRATIVE "easy terrain" thresholds for the reachability test; not robot-derived.
-EASY_MAX_SLOPE_DEG = 15.0
-EASY_MAX_JUMP_M = 0.03
-EASY_BOX_DILATION_M = 0.3
-
-
-def easy_mask(sc) -> np.ndarray:
-    """Cells that are gentle, step-free and away from boxes, on the ground-truth terrain."""
-    hf = sc.world.heightfield
-    gy, gx = np.gradient(hf, GRID.resolution)
-    easy = np.hypot(gx, gy) <= math.tan(math.radians(EASY_MAX_SLOPE_DEG))
-    pad = np.pad(hf, 1, mode="edge")
-    neighbours = (pad[:-2, 1:-1], pad[2:, 1:-1], pad[1:-1, :-2], pad[1:-1, 2:])
-    jump = np.max([np.abs(n - hf) for n in neighbours], axis=0)
-    easy &= jump <= EASY_MAX_JUMP_M
-    x, y = cell_centers(GRID)
-    d = EASY_BOX_DILATION_M
-    for b in sc.world.boxes:
-        easy &= ~(
-            (x >= b.min_xyz[0] - d)
-            & (x <= b.max_xyz[0] + d)
-            & (y >= b.min_xyz[1] - d)
-            & (y <= b.max_xyz[1] + d)
-        )
-    return easy
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -358,27 +338,77 @@ def test_box_sits_on_terrain():
 # --- Scan poses (placeholder survey pass) ------------------------------------------
 
 
-def test_scan_poses_along_segment():
-    # Flat world, start (1, 2), goal (11, 7): direction (10, 5), yaw = atan2(5, 10).
-    # A 0.8 m box straddles the 0.6 fraction point (7, 5); the camera there must sit on its top.
+def test_line_poses_skip_boxes():
+    # Flat world, start (1, 2), goal (11, 7): direction (10, 5), yaw = atan2(5, 10). A box
+    # straddles the 0.6 fraction point (7, 5): that pose is skipped, the other five remain.
     box = Box((6.5, 4.5, 0.0), (7.5, 5.5, 0.8))
-    world = World(zeros(), GRID, (box,), "test", 0)
-    sc = Scenario(world, (1.0, 2.0), (11.0, 7.0), "test", 0, {})
-    poses = scan_poses(sc, k=6)
-    assert len(poses) == 6
+    sc = Scenario(World(zeros(), GRID, (box,), "test", 0), (1.0, 2.0), (11.0, 7.0), "test", 0, {})
+    poses = scan_poses(sc, k=6, strategy="line")
+    assert len(poses) == 5
     yaw, pitch = math.atan2(5.0, 10.0), math.radians(25.0)
     axis = [math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), -math.sin(pitch)]
-    for i, T in enumerate(poses):
-        frac = i / 5
-        z = 0.8 + 0.5 if i == 3 else 0.5
-        np.testing.assert_allclose(T[:3, 3], [1 + 10 * frac, 2 + 5 * frac, z], atol=1e-12)
+    for T, frac in zip(poses, [0.0, 0.2, 0.4, 0.8, 1.0], strict=True):
+        np.testing.assert_allclose(T[:3, 3], [1 + 10 * frac, 2 + 5 * frac, 0.5], atol=1e-12)
         np.testing.assert_allclose(T[:3, 2], axis, atol=1e-12)  # optical z axis in world
 
 
-def test_scan_poses_follow_terrain():
-    # One-step mesa 0.2 m high under the 0.4 fraction point of a start (1, 6) -> goal (11, 6)
-    # segment, i.e. at (5, 6): that pose sits 0.5 m above the mesa top.
+def test_line_poses_follow_terrain():
+    # One-step mesa 0.2 m high (2 x 2 m, flat top) under the 0.4 fraction point (5, 6) of a
+    # start (1, 6) -> goal (11, 6) line: that pose sits 0.5 m above the mesa top.
     hf = add_terrace(zeros(), GRID, (5.0, 6.0), (2.0, 2.0), 0.0, 0.2, 1, 1.0, 1)
     sc = Scenario(World(hf, GRID, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
-    zs = [T[2, 3] for T in scan_poses(sc, k=6)]
+    zs = [T[2, 3] for T in scan_poses(sc, k=6, strategy="line")]
     np.testing.assert_allclose(zs, [0.5, 0.5, 0.7, 0.5, 0.5, 0.5], atol=1e-12)
+
+
+def test_flank_poses_on_flat_ground():
+    # Start (1, 6) -> goal (11, 6): heading 0, left normal +y. Rows at y = 6 +/- 2.5, along-
+    # line fractions 0.1, 0.45, 0.8 -> x = 2, 5.5, 9. Left row (y = 8.5) yaws -30 deg (toward
+    # the line), right row (y = 3.5) +30 deg. Order: by fraction, left before right.
+    sc = Scenario(World(zeros(), GRID, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
+    poses = scan_poses(sc)  # default strategy is "flank"
+    expected_xy = [(2.0, 8.5), (2.0, 3.5), (5.5, 8.5), (5.5, 3.5), (9.0, 8.5), (9.0, 3.5)]
+    p = math.radians(25.0)
+    for i, (T, (x, y)) in enumerate(zip(poses, expected_xy, strict=True)):
+        yaw = math.radians(-30.0 if i % 2 == 0 else 30.0)
+        np.testing.assert_allclose(T[:3, 3], [x, y, 0.5], atol=1e-12)
+        axis = [math.cos(p) * math.cos(yaw), math.cos(p) * math.sin(yaw), -math.sin(p)]
+        np.testing.assert_allclose(T[:3, 2], axis, atol=1e-12)
+
+
+def clearance_ok(sc, x: float, y: float) -> bool:
+    """Independent check: every cell within POSE_CLEARANCE_M of (x, y)'s cell is easy, and
+    (x, y) is >= POSE_CLEARANCE_M from the map border. Uses a Euclidean distance transform
+    of the non-easy cells (the area outside the map counts as non-easy)."""
+    if not (0.5 <= x <= 11.5 and 0.5 <= y <= 11.5):
+        return False
+    easy = np.pad(easy_mask(sc), 1, constant_values=False)
+    dist_cells = ndimage.distance_transform_edt(easy)[1:-1, 1:-1]
+    r, c = int(y // GRID.resolution), int(x // GRID.resolution)
+    return dist_cells[r, c] > POSE_CLEARANCE_M / GRID.resolution
+
+
+@pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.parametrize("seed", SEEDS_50)
+def test_flank_poses_placed_on_clear_easy_ground(family, seed):
+    sc = generate_scenario(family, seed, CFG)
+    poses = scan_poses(sc)  # must not raise
+    assert len(poses) == 6
+    for T in poses:
+        x, y, z = T[:3, 3]
+        assert clearance_ok(sc, x, y)
+        r, c = int(y // GRID.resolution), int(x // GRID.resolution)
+        # Clear easy ground is flat to within a few cm, so 0.5 m above the local cell height.
+        assert abs(z - 0.5 - sc.world.heightfield[r, c]) < 0.05
+
+
+@pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.parametrize("seed", [0, 1])
+def test_capture_succeeds_from_every_flank_pose(family, seed):
+    # Low resolution keeps this fast; what matters is that cast_frame accepts every pose
+    # (above terrain, outside boxes) and returns some valid depth.
+    sensor = SensorConfig(width=32, height=24)
+    sc = generate_scenario(family, seed, CFG)
+    for i, T in enumerate(scan_poses(sc, sensor=sensor)):
+        frame, _ = capture(sc.world, T, sensor, np.random.default_rng((seed, i)))
+        assert np.isfinite(frame.depth_z).any()

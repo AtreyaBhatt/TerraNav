@@ -5,11 +5,30 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
+import pyvista as pv
 
 from terranav.frames import T_world_cam
 from terranav.sim.scenario import generate_scenario, scan_poses
-from terranav.types import CameraIntrinsics
-from terranav.viz.scene3d import frustum_corners_world, render_scene
+from terranav.types import CameraIntrinsics, SensorConfig
+from terranav.viz.scene3d import _populate, frustum_corners_world, render_scene
+
+
+def _offscreen_gl_available() -> bool:
+    try:
+        pl = pv.Plotter(off_screen=True, window_size=[16, 16])
+        pl.add_mesh(pv.Sphere())
+        pl.screenshot(return_img=True)
+        pl.close()
+    except Exception:  # noqa: BLE001 - VTK/GL failures vary by platform; any means "cannot render"
+        return False
+    return True
+
+
+@pytest.fixture(scope="module")
+def offscreen_gl():
+    if not _offscreen_gl_available():
+        pytest.skip("offscreen OpenGL rendering is unavailable in this environment")
 
 
 def test_frustum_corners_orientation():
@@ -24,9 +43,23 @@ def test_frustum_corners_orientation():
     np.testing.assert_allclose(corners, expected, atol=1e-12)
 
 
-def test_render_scene_writes_both_views(tmp_path):
+def test_every_pose_gets_its_own_actors(offscreen_gl):
     sc = generate_scenario("mixed", 0)
-    poses = scan_poses(sc, k=3)
+    poses = scan_poses(sc, k=6)
+    pl = pv.Plotter(off_screen=True, window_size=[64, 64])
+    points = [np.zeros((0, 3)) for _ in poses]
+    _populate(pl, sc, poses, points, SensorConfig().intrinsics())
+    names = set(pl.actors)
+    for i in range(6):
+        assert f"frustum_{i}" in names and f"axis_{i}" in names
+    assert {"terrain", "start", "goal"} <= names
+    assert {f"box_{j}" for j in range(len(sc.world.boxes))} <= names
+    pl.close()
+
+
+def test_render_scene_writes_both_views(tmp_path, offscreen_gl):
+    sc = generate_scenario("mixed", 0)
+    poses = scan_poses(sc, k=6)
     rng = np.random.default_rng(0)
     points = [rng.uniform(0, 12, size=(50, 3)) for _ in poses]
     oblique, top = render_scene(sc, poses, points, tmp_path / "scene.png", window_size=(320, 200))

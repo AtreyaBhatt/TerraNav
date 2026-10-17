@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import Any
 
 import numpy as np
+from scipy import ndimage
 
 from terranav.config import SimConfig
 from terranav.frames import T_world_cam
@@ -29,6 +30,7 @@ from terranav.sim.world import (
     add_terrace,
     bilinear_sample,
     box_on_terrain,
+    cell_centers_xy,
 )
 from terranav.types import GridSpec, Scenario, SensorConfig, World
 
@@ -310,33 +312,165 @@ def generate_scenario(family: str, seed: int, cfg: SimConfig | None = None) -> S
     return Scenario(world, start, goal, family, seed, _freeze(params))
 
 
+# --- Easy ground -------------------------------------------------------------------
+
+# ILLUSTRATIVE "easy terrain" thresholds: plausible for a small ground robot, not derived
+# from any vehicle model. Used for reachability checks and scan-pose placement.
+EASY_MAX_SLOPE_DEG = 15.0
+EASY_MAX_JUMP_M = 0.03  # largest height difference to any 4-neighbour cell
+EASY_BOX_DILATION_M = 0.3  # clearance around box footprints
+
+
+def easy_mask(scenario: Scenario) -> np.ndarray:
+    """(ny, nx) bool on the terrain grid: gentle, step-free cells away from boxes.
+
+    A cell is easy iff its ground-truth gradient magnitude <= tan(EASY_MAX_SLOPE_DEG), its
+    height differs from every 4-neighbour by <= EASY_MAX_JUMP_M, and its centre lies outside
+    every box footprint dilated by EASY_BOX_DILATION_M (square dilation).
+    """
+    world = scenario.world
+    hf, grid = world.heightfield, world.grid
+    gy, gx = np.gradient(hf, grid.resolution)  # d/drow = d/dy, d/dcol = d/dx
+    easy = np.hypot(gx, gy) <= math.tan(math.radians(EASY_MAX_SLOPE_DEG))
+    pad = np.pad(hf, 1, mode="edge")
+    neighbours = (pad[:-2, 1:-1], pad[2:, 1:-1], pad[1:-1, :-2], pad[1:-1, 2:])
+    easy &= np.max([np.abs(n - hf) for n in neighbours], axis=0) <= EASY_MAX_JUMP_M
+    x, y = cell_centers_xy(grid)
+    d = EASY_BOX_DILATION_M
+    for b in world.boxes:
+        easy &= ~(
+            (x >= b.min_xyz[0] - d)
+            & (x <= b.max_xyz[0] + d)
+            & (y >= b.min_xyz[1] - d)
+            & (y <= b.max_xyz[1] + d)
+        )
+    return easy
+
+
+# --- Scan poses -------------------------------------------------------------------
+
+SCAN_STRATEGIES = ("flank", "line")
+# Flank survey STARTING VALUES, to be tuned against measured coverage (scripts/eval_scan.py).
+FLANK_LATERAL_OFFSET_M = 2.5  # d_lat: distance of each row from the start->goal line
+FLANK_TOE_IN_DEG = 30.0  # theta_in: rows look this far inward from the line's heading
+FLANK_FRACTIONS = (0.1, 0.8)  # first/last along-line fraction of each row
+POSE_CLEARANCE_M = 0.5  # poses need easy ground within this radius and this far from the border
+POSE_SEARCH_STEP_M = 0.1
+POSE_SEARCH_AWAY_M = 3.0  # how far beyond d_lat the lateral search may go
+# If the whole lateral search fails, it is repeated at these along-line fraction shifts, in
+# order (needed when one side of the line is boxed in between features and the map edge).
+FLANK_FRACTION_SHIFTS = (0.0, -0.05, 0.05, -0.10, 0.10, -0.15, 0.15, -0.20, 0.20, -0.25, 0.25)
+
+
+def pose_ground_mask(scenario: Scenario) -> np.ndarray:
+    """(ny, nx) bool: easy_mask eroded by a POSE_CLEARANCE_M disk (outside the map = not easy).
+
+    Because the erosion treats the area outside the map as not easy, every kept cell is also
+    at least POSE_CLEARANCE_M from the map border.
+    """
+    grid = scenario.world.grid
+    r = round(POSE_CLEARANCE_M / grid.resolution)
+    yy, xx = np.mgrid[-r : r + 1, -r : r + 1]
+    disk = xx**2 + yy**2 <= r**2
+    return ndimage.binary_erosion(easy_mask(scenario), structure=disk, border_value=0)
+
+
+def _pose_ok(mask: np.ndarray, grid: GridSpec, x: float, y: float) -> bool:
+    x0, y0 = grid.origin
+    m = POSE_CLEARANCE_M
+    if not (x0 + m <= x <= x0 + grid.size_x - m and y0 + m <= y <= y0 + grid.size_y - m):
+        return False
+    r, c = grid.xy_to_rc(x, y)
+    return bool(mask[int(r), int(c)])
+
+
+def _camera_pose(scenario: Scenario, x: float, y: float, yaw_rad: float, sensor) -> np.ndarray:
+    world = scenario.world
+    z = float(bilinear_sample(world.heightfield, world.grid, x, y)) + sensor.mount_height_m
+    return T_world_cam(np.array([x, y, z]), yaw_rad, sensor.pitch_down_rad)
+
+
 # TODO(M2): revisit scan strategy (this is a survey pass with known poses).
 def scan_poses(
-    scenario: Scenario, k: int = 6, sensor: SensorConfig | None = None
+    scenario: Scenario,
+    k: int = 6,
+    strategy: str = "flank",
+    sensor: SensorConfig | None = None,
+    d_lat_m: float = FLANK_LATERAL_OFFSET_M,
+    theta_in_deg: float = FLANK_TOE_IN_DEG,
 ) -> list[np.ndarray]:
-    """PLACEHOLDER survey pass: k known camera poses along the straight start->goal segment.
+    """PLACEHOLDER survey: known camera poses (4x4 float64 T_world_cam) for one scenario.
 
-    Pose i (i = 0..k-1) sits at fraction i / (k - 1) of the segment (0, 0.2, ..., 1.0 for
-    k = 6), sensor.mount_height_m above the support surface there, yawed toward the goal and
-    pitched down by sensor.pitch_down_rad. The support surface is the bilinear terrain height,
-    or the top of a box whose footprint contains the point (a camera may not sit inside a
-    box). Returns (4, 4) float64 T_world_cam matrices.
+    Every camera is sensor.mount_height_m above the bilinear terrain at its (x, y) and pitched
+    down by sensor.pitch_down_rad. With psi the heading of the start->goal line and n_hat its
+    left normal:
+
+    "flank" (default): two rows of k/2 poses at lateral offsets +d_lat_m (left) and -d_lat_m
+      (right) from the line, at along-line fractions linspace(0.1, 0.8, k/2) (0.1, 0.45, 0.8
+      for k = 6). Left-row yaw = psi - theta_in, right-row yaw = psi + theta_in (both turned
+      toward the line). A pose must lie in pose_ground_mask; otherwise the lateral offset is
+      searched in POSE_SEARCH_STEP_M steps, first toward the line (down to 0), then away (up to
+      d_lat_m + POSE_SEARCH_AWAY_M). If no offset works, the same search is repeated at the
+      shifted fractions FLANK_FRACTION_SHIFTS (clipped to [0, 1]); ValueError if all fail.
+      Order: by fraction, left before right.
+    "line": comparison baseline. k poses at fractions linspace(0, 1, k) on the line, yaw psi.
+      A pose inside a box footprint or off easy_mask is SKIPPED, so k - len(result) poses
+      were skipped.
 
     Frame i is captured with the per-frame generator np.random.default_rng((scenario.seed, i)).
     """
-    if k < 2:
-        raise ValueError(f"k must be >= 2, got {k}")
+    if strategy not in SCAN_STRATEGIES:
+        raise ValueError(f"unknown strategy {strategy!r}; expected one of {SCAN_STRATEGIES}")
     sensor = sensor if sensor is not None else SensorConfig()
     s, g = np.asarray(scenario.start_xy), np.asarray(scenario.goal_xy)
-    yaw_rad = math.atan2(g[1] - s[1], g[0] - s[0])
+    t_hat = (g - s) / np.linalg.norm(g - s)
+    n_hat = np.array([-t_hat[1], t_hat[0]])  # left of the start->goal heading
+    psi = math.atan2(t_hat[1], t_hat[0])
     world = scenario.world
+
+    if strategy == "line":
+        if k < 2:
+            raise ValueError(f"line strategy needs k >= 2, got {k}")
+        easy = easy_mask(scenario)
+        poses = []
+        for frac in np.linspace(0.0, 1.0, k):
+            x, y = s + frac * (g - s)
+            in_box = any(
+                b.min_xyz[0] <= x <= b.max_xyz[0] and b.min_xyz[1] <= y <= b.max_xyz[1]
+                for b in world.boxes
+            )
+            r, c = world.grid.xy_to_rc(x, y)
+            if not in_box and easy[int(r), int(c)]:
+                poses.append(_camera_pose(scenario, x, y, psi, sensor))
+        return poses
+
+    if k < 2 or k % 2:
+        raise ValueError(f"flank strategy needs an even k >= 2, got {k}")
+    mask = pose_ground_mask(scenario)
+    step = POSE_SEARCH_STEP_M
+    toward = [d_lat_m - step * j for j in range(1, int(d_lat_m / step + 1e-9) + 1)]
+    away = [d_lat_m + step * j for j in range(1, round(POSE_SEARCH_AWAY_M / step) + 1)]
+    offsets = [d_lat_m, *toward, *away]
+    theta = math.radians(theta_in_deg)
     poses = []
-    for frac in np.linspace(0.0, 1.0, k):
-        x, y = s + frac * (g - s)
-        support = float(bilinear_sample(world.heightfield, world.grid, x, y))
-        for b in world.boxes:
-            if b.min_xyz[0] <= x <= b.max_xyz[0] and b.min_xyz[1] <= y <= b.max_xyz[1]:
-                support = max(support, b.max_xyz[2])
-        position = np.array([x, y, support + sensor.mount_height_m])
-        poses.append(T_world_cam(position, yaw_rad, sensor.pitch_down_rad))
+    for frac in np.linspace(*FLANK_FRACTIONS, k // 2):
+        for side in (1.0, -1.0):  # left row, then right row
+            xy = _flank_position(mask, world.grid, s, g, n_hat, frac, side, offsets)
+            if xy is None:
+                raise ValueError(
+                    f"{scenario.family} seed {scenario.seed}: no valid flank pose near fraction "
+                    f"{frac:.2f} on the {'left' if side > 0 else 'right'} side"
+                )
+            poses.append(_camera_pose(scenario, *xy, psi - side * theta, sensor))
     return poses
+
+
+def _flank_position(mask, grid, s, g, n_hat, frac, side, offsets) -> tuple[float, float] | None:
+    """First valid (x, y) over fraction shifts (outer loop) and lateral offsets (inner)."""
+    for shift in FLANK_FRACTION_SHIFTS:
+        base = s + float(np.clip(frac + shift, 0.0, 1.0)) * (g - s)
+        for d in offsets:
+            x, y = base + side * d * n_hat
+            if _pose_ok(mask, grid, x, y):
+                return float(x), float(y)
+    return None

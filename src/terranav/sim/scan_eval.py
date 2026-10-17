@@ -1,0 +1,86 @@
+"""Scan-coverage evaluation jobs, runnable serially or in worker processes.
+
+A job is (family, seed, strategy). Each job builds its scenario, scan poses and per-frame
+generators np.random.default_rng((seed, frame_index)) itself, so results do not depend on
+how jobs are distributed: a parallel run returns exactly the serial run's numbers.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
+
+import numpy as np
+
+from terranav.config import SimConfig
+from terranav.perception.backproject import backproject
+from terranav.sim.coverage import corridor_mask, coverage, reachable_mask
+from terranav.sim.scenario import generate_scenario, scan_poses
+from terranav.sim.sensor import capture
+from terranav.types import SensorConfig
+
+Job = tuple[str, int, str]  # (family, seed, strategy)
+# Environment variables that cap BLAS/OpenMP thread pools in worker processes.
+SINGLE_THREAD_ENV = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+
+
+def limit_threads() -> None:
+    """Cap native thread pools at one thread (workers already run one per core).
+
+    Takes effect for libraries that read these variables when they load, i.e. in processes
+    that set them before importing numpy (as scripts/eval_scan.py does at the top). Also used
+    as the pool initializer for start methods that import numpy afresh in each worker.
+    """
+    for name in SINGLE_THREAD_ENV:
+        os.environ[name] = "1"
+
+
+def evaluate_job(job: Job, k: int = 6, sensor: SensorConfig | None = None) -> dict:
+    """Capture every scan pose of one job and measure corridor / reachable coverage."""
+    family, seed, strategy = job
+    cfg = SimConfig()
+    sensor = sensor if sensor is not None else cfg.sensor
+    sc = generate_scenario(family, seed, cfg)
+    poses = scan_poses(sc, k=k, strategy=strategy, sensor=sensor)
+    points = []
+    for i, T in enumerate(poses):
+        frame, _ = capture(sc.world, T, sensor, np.random.default_rng((seed, i)))
+        points.append(backproject(frame)[0])
+    return {
+        "family": family,
+        "seed": seed,
+        "strategy": strategy,
+        "skipped": k - len(poses),
+        "corridor": coverage(points, cfg.map_grid, corridor_mask(sc, cfg.map_grid)),
+        "reachable": coverage(points, cfg.map_grid, reachable_mask(sc, cfg.map_grid)),
+    }
+
+
+def run_jobs(
+    jobs: Sequence[Job],
+    workers: int,
+    k: int = 6,
+    sensor: SensorConfig | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """Evaluate jobs (in input order). workers == 1 runs serially in this process.
+
+    progress(done, total) is called after each finished job, if given.
+    """
+    fn = partial(evaluate_job, k=k, sensor=sensor)
+    results: list[dict | None] = [None] * len(jobs)
+    if workers == 1:
+        for i, job in enumerate(jobs):
+            results[i] = fn(job)
+            if progress:
+                progress(i + 1, len(jobs))
+    else:
+        with ProcessPoolExecutor(max_workers=workers, initializer=limit_threads) as pool:
+            futures = {pool.submit(fn, job): i for i, job in enumerate(jobs)}
+            for done, fut in enumerate(as_completed(futures), start=1):
+                results[futures[fut]] = fut.result()
+                if progress:
+                    progress(done, len(jobs))
+    return results  # type: ignore[return-value]

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "terranav"
+version = "0.1.0"
+description = "3D terrain simulator, depth sensor model, and perception pipeline"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.1",
+    "scipy>=1.14",
+    "matplotlib>=3.9",
+    "pyvista>=0.44",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "hypothesis>=6.112",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+terranav = "terranav.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/terranav"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

@@ -152,7 +152,7 @@ def cast_frame(
 
     The nearest positive hit (terrain or box) wins; hits with depth_z > max_depth_z_m are
     then discarded (range_t NaN, hit_kind HIT_NONE). Raises ValueError if the camera origin
-    is inside the map and at or below the terrain surface.
+    is inside the map and at or below the terrain surface, or inside (or on) any box.
     """
     T = np.asarray(T_world_cam, dtype=np.float64)
     if T.shape != (4, 4):
@@ -162,6 +162,9 @@ def cast_frame(
     ox, oy = np.array([origin[0]]), np.array([origin[1]])
     if _inside(grid, ox, oy)[0] and origin[2] <= _bilinear(hf, grid, ox, oy)[0]:
         raise ValueError(f"camera origin {origin} is at or below the terrain")
+    for box in world.boxes:
+        if np.all((origin >= box.min_xyz) & (origin <= box.max_xyz)):
+            raise ValueError(f"camera origin {origin} is inside (or on) box {box}")
 
     H, W = intrinsics.height, intrinsics.width
     rays_cam = unit_rays_cam(intrinsics).reshape(-1, 3)

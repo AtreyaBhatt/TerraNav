@@ -30,7 +30,10 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   per cell carries what the cost function needs; segmentation would add thresholds and failure
   modes (ramps, mesas) without new information.
 - **Evidence:** `out/eval_map.txt` at ab5b5a2-dirty (seeds 0–9, "flank" survey): observed-cell
-  |z_mean − GT| median ≤ 0.4 mm, p95 ≤ 4.4 mm in every family.
+  |z_mean − GT| median ≤ 0.4 mm, p95 ≤ 4.4 mm in every family. At 3b8996a ("flank+start"):
+  median 0.0003 m in every family, p95 0.0032–0.0050 m. Perception latency (fuse + fill +
+  footprint, serial, `out/eval_map_latency.txt` at 3b8996a): median 24.4–26.4 ms, p95
+  25.0–36.2 ms per scenario.
 
 ## D4. Unknown = blocked, with small-gap filling
 - **Decision:** planning treats UNKNOWN cells as blocked; `fill_gaps` bridges only gaps ≤ 0.3 m
@@ -49,7 +52,9 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Reason:** the robot stands there, so pose and wheel contact (proprioception) give that terrain;
   everything else must come from the sensor.
 - **Evidence:** renders `out/elevation_mixed_s{0,1}.png` ("flank" survey): the start area was never
-  in view; without the footprint the start would be unknown (D9 adds the missing view).
+  in view; without the footprint the start would be unknown (D9 adds the missing view). With
+  footprint + start pose, start and goal share a known component in 1.00 of scenarios in every
+  family (`out/eval_map.txt`, 3b8996a, seeds 0–9).
 
 ## D6. Sensing and scope
 - **Decision:** one simulated depth camera (no RGB, no lidar); known camera poses; static world;
@@ -76,7 +81,9 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Reason:** box tops above the camera are never seen, so a box appears as an observed rim
   around unknown cells; unguarded filling interpolated low rim/ground heights into the box.
 - **Evidence:** before the guard, filled-cell |z_mean − GT| p95 was 0.47 m (flat_obstacles) and
-  0.26 m (mixed) (`out/eval_map.txt` at ab5b5a2-dirty). After: TBD from the clean-tree run.
+  0.26 m (mixed) (`out/eval_map.txt` at ab5b5a2-dirty). After (span guard, 3b8996a): 0.0028
+  (flat_obstacles), 0.0124 (slopes), 0.0179 (rough), 0.0526 (steps), 0.0101 m (mixed).
+  Superseded by the plane-residual guard (D12).
   tests/test_hole_fill.py: a box rim stays unknown with the guard, its interior corners fill
   without it.
 
@@ -88,4 +95,36 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   of known cells and, with unknown = blocked, the robot could not leave it.
 - **Evidence:** start→goal known-connectivity on mixed seeds 0 and 1: False with "flank",
   True with "flank+start". The start camera's nearest visible ground is ~0.285 m ahead on flat
-  ground (tests/test_world.py), inside the 0.4 m footprint. Family-level rate: TBD (clean run).
+  ground (tests/test_world.py), inside the 0.4 m footprint. Family-level rate with
+  "flank+start": connected 1.00 in all five families (`out/eval_map.txt`, 3b8996a, seeds 0–9).
+
+## D10. Traversability model
+- **Decision:** `perception/traversability.py`. Lethal = unknown | no feature estimate |
+  slope ≥ 30° | roughness ≥ 0.05 m | step ≥ 0.20 m, then dilated by the robot radius 0.3 m.
+  Cost = 0.4·slope/30° + 0.3·rough/0.05 + 0.3·step/0.20 in [0, 1), NaN where lethal.
+  ALL values illustrative (`TraversabilityConfig`), not from a vehicle model.
+- **Alternatives:** learned or vehicle-dynamics costs; a single height-difference threshold.
+- **Reason:** three interpretable features with hard limits and a bounded, monotone cost that
+  the planner can trade against distance; ground truth uses the same functions on GT heights.
+- **Evidence:** TBD from the clean `scripts/eval_trav.py` run.
+
+## D11. Noise-aware features
+- **Decision:** roughness = sqrt(max(0, residual² − fit_noise_var)), where residual is the
+  dof-corrected weighted plane-fit RMS and fit_noise_var = support / Σ(1/z_mean_var) (noise of the
+  fitted cell means). A neighbour jump counts as a step only if |Δz| > 3·sqrt(var_i + var_j).
+- **Alternatives:** raw residual and raw jumps (noise reads as roughness/steps at long range);
+  subtracting per-point noise_var (overstates the noise of a many-point cell mean ~n times).
+- **Reason:** sensor noise grows as s0 + s1·z²; without these corrections far, noisy cells would
+  look rough or stepped. On a clean slope adjacent jumps stay ≤ tan(slope)·0.1·√2 (0.066 m at 25°).
+- **Evidence:** tests/test_features.py (iid noise: roughness ≈ σ without, ≈ 0 with the
+  subtraction; bounded noise passes no steps). Pipeline numbers: TBD from the clean eval run.
+
+## D12. Fill guard v2: plane residual
+- **Decision:** `fill_gaps` fits a plane to the observed cells around each gap cell (radius 0.3 m)
+  and fills only if support ≥ 8 and residual ≤ 0.02 m (illustrative). Replaces the 0.10 m span guard.
+- **Alternatives:** span guard (D8), which also refused legitimate fills on slopes (a 25° ramp
+  spans ~0.19 m over the window).
+- **Reason:** the residual separates "tilted but planar" (fill) from steps, box rims and rough
+  ground (do not fill).
+- **Evidence:** tests/test_hole_fill.py: a striped 25° ramp fills, a striped 0.3 m step and a
+  box rim do not. Pipeline numbers: TBD from the clean eval run.

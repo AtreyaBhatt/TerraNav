@@ -5,7 +5,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from terranav.perception.elevation_map import FILLED, FOOTPRINT, OBSERVED, UNKNOWN, fuse_points
+from terranav.perception.elevation_map import (
+    FILLED,
+    FOOTPRINT,
+    OBSERVED,
+    SIGMA_FLOOR_M,
+    UNKNOWN,
+    fuse_points,
+)
 from terranav.perception.hole_fill import fill_gaps, mark_footprint
 from terranav.sim.ground_truth import ground_truth_elevation
 from terranav.types import Box, GridSpec, Scenario, World
@@ -21,24 +28,54 @@ def map_with_cells(rows: np.ndarray, cols: np.ndarray, z: np.ndarray):
     return fuse_points(np.column_stack([x, y, z]), np.full(len(z), 0.01), MAP)
 
 
-def test_fill_rows_on_inclined_plane():
-    # Observed every 3rd row (0, 3, ..., 117) on z = 0.2 x; rows in between are 0.2 m gaps,
-    # within max_gap_m = 0.3. Rows 118-119 lie outside the last observed row (not a gap).
+GAP_ROWS = np.array([r for r in range(117) if r % 3])
+# The guard's plane fit (radius 0.3 m) around a gap cell sees two observed rows. In the map's
+# first and last column only dx >= 0 (or <= 0) exists: 3 + 3 = 6 cells < MIN_SUPPORT = 8, so
+# those two columns are not filled; from column 1 on there are 4 + 4 = 8.
+INNER_COLS = slice(1, 119)
+
+
+def striped(z_of_col) -> tuple:
+    """Observed every 3rd row (0, 3, ..., 117), one point per cell; 2-row (0.2 m) gaps."""
     rr, cc = np.meshgrid(np.arange(0, 120, 3), np.arange(120), indexing="ij")
     rows, cols = rr.ravel(), cc.ravel()
-    m = fill_gaps(map_with_cells(rows, cols, 0.2 * (cols + 0.5) * 0.1))
-    gap_rows = np.array([r for r in range(117) if r % 3])
-    assert np.all(m.source[gap_rows, :] == FILLED)
-    assert np.all(m.count[gap_rows, :] == 0)
+    return fill_gaps(map_with_cells(rows, cols, z_of_col(cols)))
+
+
+@pytest.mark.parametrize("slope", [0.2, np.tan(np.radians(25.0))], ids=["0.2", "25deg"])
+def test_fill_rows_on_inclined_plane(slope):
+    # z = slope * x, x = (col + 0.5) * 0.1. The plane residual is ~0, so every gap cell away
+    # from the first/last column fills (a 25 deg ramp too: v1's span guard refused it).
+    # Rows 118-119 lie outside the last observed row (not a gap).
+    m = striped(lambda cols: slope * (cols + 0.5) * 0.1)
+    gap = m.source[GAP_ROWS, INNER_COLS]
+    assert np.all(gap == FILLED)
+    assert np.all(m.count[GAP_ROWS, INNER_COLS] == 0)
     x = (np.arange(120) + 0.5) * 0.1
     np.testing.assert_allclose(
-        m.z_mean[gap_rows, :], np.broadcast_to(0.2 * x, (len(gap_rows), 120)), atol=0.01
+        m.z_mean[GAP_ROWS, INNER_COLS], np.broadcast_to(slope * x[INNER_COLS], gap.shape), atol=0.01
     )
-    # z_min / z_max of a filled cell bracket its neighbours: the plane rises 0.02 m per column.
-    assert np.all(m.z_min[gap_rows, :] <= m.z_mean[gap_rows, :] + 1e-12)
-    assert np.all(m.z_max[gap_rows, :] >= m.z_mean[gap_rows, :] - 1e-12)
+    # z_min / z_max of a filled cell bracket its neighbours.
+    assert np.all(m.z_min[GAP_ROWS, INNER_COLS] <= m.z_mean[GAP_ROWS, INNER_COLS] + 1e-12)
+    assert np.all(m.z_max[GAP_ROWS, INNER_COLS] >= m.z_mean[GAP_ROWS, INNER_COLS] - 1e-12)
+    # z_mean_var of a filled cell = max over observed neighbours = 1 / (1 / 0.01^2) = 1e-4.
+    np.testing.assert_allclose(m.z_mean_var[GAP_ROWS, INNER_COLS], 1e-4)
     assert np.all(m.source[118:, :] == UNKNOWN)
     assert np.all(m.source[::3, :][:40] == OBSERVED)
+
+
+def test_step_edge_is_not_filled_across():
+    # Striped rows on flat ground, 0 m for cols <= 59 and 0.3 m for cols >= 60. A gap cell's
+    # plane fit (radius 3 cells) only contains the observed rows at |dy| = 1 and 2, where the
+    # disk spans |dx| <= 2; so it mixes both levels iff the column is within 58..61:
+    # residual >> 0.02 m, those stay UNKNOWN. Columns 57 and 62 see one level only (in the
+    # fit and in the +-2-column fill window) and fill with it exactly.
+    m = striped(lambda cols: np.where(cols >= 60, 0.3, 0.0))
+    assert np.all(m.source[GAP_ROWS, 58:62] == UNKNOWN)
+    assert np.all(m.source[GAP_ROWS, 1:58] == FILLED)
+    assert np.all(m.source[GAP_ROWS, 62:119] == FILLED)
+    np.testing.assert_allclose(m.z_mean[GAP_ROWS, 1:58], 0.0, atol=1e-12)
+    np.testing.assert_allclose(m.z_mean[GAP_ROWS, 62:119], 0.3, atol=1e-12)
 
 
 def test_large_hole_stays_unknown_except_rim():
@@ -60,7 +97,7 @@ def test_box_rim_is_not_filled():
     # Ground (z = 0) observed everywhere except a 10 x 10 box footprint, rows/cols 50..59.
     # Its rim cells see side-face points from z = 0.05 to 0.5; the top was never seen, so the
     # interior (rows/cols 51..58) is unknown. Two rim cells, (50, 54) and (50, 55), are also
-    # unobserved. Any window touching the rim spans 0.5 m > STEP_GUARD_M, so neither the
+    # unobserved. Any plane fit touching the rim has residual >> FILL_RESIDUAL_GUARD_M, so neither the
     # interior nor the rim gap may be filled.
     box = np.zeros((120, 120), dtype=bool)
     box[50:60, 50:60] = True
@@ -94,7 +131,7 @@ def test_box_rim_fills_without_guard():
     rr, cc = np.nonzero(rim)
     rows, cols = np.concatenate([gr, rr]), np.concatenate([gc, cc])
     z = np.concatenate([np.zeros(len(gr)), np.full(len(rr), 0.5)])
-    unguarded = fill_gaps(map_with_cells(rows, cols, z), step_guard_m=np.inf)
+    unguarded = fill_gaps(map_with_cells(rows, cols, z), residual_guard_m=np.inf)
     guarded = fill_gaps(map_with_cells(rows, cols, z))
     for corner in ((51, 51), (51, 58), (58, 51), (58, 58)):
         assert unguarded.source[corner] == FILLED
@@ -115,6 +152,7 @@ def test_footprint_after_fill():
     np.testing.assert_allclose(m.z_mean[inside], 0.3)
     np.testing.assert_allclose(m.z_min[inside], 0.3)
     np.testing.assert_allclose(m.z_max[inside], 0.3)
+    np.testing.assert_allclose(m.z_mean_var[inside], SIGMA_FLOOR_M**2)
 
 
 def test_ground_truth_elevation_block_mean_and_box_top():

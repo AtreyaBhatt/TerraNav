@@ -32,6 +32,7 @@ class ElevationMap:
     count: int32 number of fused points.
     z_min, z_max: extreme point heights (m).
     z_mean: inverse-variance weighted mean height (m), weights 1 / sigma(depth_z)^2.
+    z_mean_var: variance of that weighted mean (m^2), 1 / sum(1 / sigma_i^2).
     z_var: unweighted population variance (ddof = 0) of the cell's point heights (m^2);
         0 for single-point cells. Measures within-cell spread (roughness, steps).
     noise_var: mean of the points' modelled sensor variances sigma^2 (m^2).
@@ -44,6 +45,7 @@ class ElevationMap:
     z_min: np.ndarray
     z_max: np.ndarray
     z_mean: np.ndarray
+    z_mean_var: np.ndarray
     z_var: np.ndarray
     noise_var: np.ndarray
     source: np.ndarray
@@ -51,7 +53,8 @@ class ElevationMap:
     def __post_init__(self) -> None:
         shape = (self.grid.ny, self.grid.nx)
         dtypes = {"count": np.int32, "source": np.uint8}
-        for name in ("count", "z_min", "z_max", "z_mean", "z_var", "noise_var", "source"):
+        names = ("count", "z_min", "z_max", "z_mean", "z_mean_var", "z_var", "noise_var", "source")
+        for name in names:
             arr = np.array(getattr(self, name), dtype=dtypes.get(name, np.float64), copy=True)
             if arr.shape != shape:
                 raise ValueError(f"{name} shape {arr.shape} != grid {shape}")
@@ -80,7 +83,8 @@ def fuse_points(points: np.ndarray, sigma: np.ndarray, map_grid: GridSpec) -> El
     seen = count > 0
     n = np.where(seen, count, 1)  # avoid 0-division; unseen cells are set to NaN below
     w = 1.0 / np.square(np.maximum(s, SIGMA_FLOOR_M))
-    z_mean = np.bincount(idx, w * z, n_cells) / np.where(seen, np.bincount(idx, w, n_cells), 1.0)
+    sum_w = np.where(seen, np.bincount(idx, w, n_cells), 1.0)
+    z_mean = np.bincount(idx, w * z, n_cells) / sum_w
     plain_mean = np.bincount(idx, z, n_cells) / n
     z_var = np.bincount(idx, np.square(z - plain_mean[idx]), n_cells) / n  # two-pass, ddof 0
     noise_var = np.bincount(idx, np.square(s), n_cells) / n
@@ -98,6 +102,7 @@ def fuse_points(points: np.ndarray, sigma: np.ndarray, map_grid: GridSpec) -> El
         z_min=grid(z_min),
         z_max=grid(z_max),
         z_mean=grid(z_mean),
+        z_mean_var=grid(1.0 / sum_w),
         z_var=grid(z_var),
         noise_var=grid(noise_var),
         source=np.where(seen, OBSERVED, UNKNOWN).reshape(ny, nx),

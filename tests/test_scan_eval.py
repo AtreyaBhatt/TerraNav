@@ -50,9 +50,19 @@ def test_known_connected_hand_built():
     count = (src == OBSERVED).astype(np.int32)
 
     def emap(source):
-        return ElevationMap(grid, count, nan, nan, nan, nan, nan, source)
+        return ElevationMap(grid, count, nan, nan, nan, nan, nan, nan, source)
 
     assert not known_connected(emap(src), (0.5, 1.5), (4.5, 1.5))
     src[1, 2] = FILLED  # close the gap
     assert known_connected(emap(src), (0.5, 1.5), (4.5, 1.5))
     assert not known_connected(emap(src), (0.5, 1.5), (2.5, 2.5))  # goal cell unknown
+
+
+def test_trav_eval_job_smoke():
+    from terranav.sim.trav_eval import evaluate_trav_job
+
+    r = evaluate_trav_job(("mixed", 0, "flank+start"), sensor=SENSOR)
+    assert 0 <= r["false_free"] <= r["gt_lethal"] and 0 <= r["false_lethal"] <= r["gt_free"]
+    assert r["gt_lethal"] + r["gt_free"] > 0 and r["cost_n"] <= r["gt_free"]
+    assert isinstance(r["connected_perceived"], bool) and isinstance(r["connected_gt"], bool)
+    assert r["connected_gt"]  # GT must allow a route: scenarios guarantee easy reachability

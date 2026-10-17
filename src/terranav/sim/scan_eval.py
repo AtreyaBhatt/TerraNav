@@ -95,3 +95,18 @@ def run_jobs(
 ) -> list[dict]:
     """Scan-coverage evaluation of jobs (see evaluate_job) via run_parallel."""
     return run_parallel(partial(evaluate_job, k=k, sensor=sensor), jobs, workers, progress)
+
+
+def git_revision() -> tuple[str, bool]:
+    """(HEAD commit hash, tracked files dirty?) of the current directory; ("unknown", False)
+    outside a git checkout."""
+    import subprocess
+
+    def run(*cmd: str) -> str:
+        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+    try:
+        rev = run("git", "rev-parse", "HEAD")
+        return rev, bool(run("git", "status", "--porcelain", "--untracked-files=no"))
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown", False

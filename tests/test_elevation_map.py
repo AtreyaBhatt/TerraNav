@@ -45,6 +45,9 @@ def test_per_cell_statistics():
     assert m.noise_var[0, 0] == pytest.approx(0.01, abs=1e-15)
     assert m.z_mean[1, 2] == pytest.approx(0.2, abs=1e-12)
     assert m.noise_var[1, 2] == pytest.approx(0.025, abs=1e-15)
+    # Variance of the weighted mean = 1 / sum(1 / sigma^2): 1 / (3 * 100) and 1 / (100 + 25).
+    assert m.z_mean_var[0, 0] == pytest.approx(1 / 300, abs=1e-15)
+    assert m.z_mean_var[1, 2] == pytest.approx(1 / 125, abs=1e-15)
     assert m.z_var[1, 2] == pytest.approx(0.25, abs=1e-12)
     assert m.source[0, 0] == OBSERVED and m.source[1, 2] == OBSERVED
 
@@ -77,7 +80,7 @@ def test_unknown_cells():
     m = fuse_points(pts([0.5, 0.5, 1.0]), np.array([0.1]), SMALL)
     unknown = m.count == 0
     assert unknown.sum() == 11
-    for arr in (m.z_min, m.z_max, m.z_mean, m.z_var, m.noise_var):
+    for arr in (m.z_min, m.z_max, m.z_mean, m.z_mean_var, m.z_var, m.noise_var):
         assert np.all(np.isnan(arr[unknown]))
     assert np.all(m.source[unknown] == UNKNOWN)
 

@@ -201,6 +201,7 @@ def test_invalid_reason_consistent_with_nan():
     np.testing.assert_array_equal(dbg.invalid_reason[drop], DROPOUT)
 
 
+@pytest.mark.slow  # three full-resolution captures
 def test_determinism_and_global_rng_untouched():
     before = np.random.get_state()
     a, da = mixed_capture(7)

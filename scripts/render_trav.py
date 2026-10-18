@@ -37,8 +37,8 @@ def main() -> None:
     trav = traversability(emap, feats, tcfg)
     gt_map = ground_truth_map(sc, grid)
     gt = traversability(gt_map, terrain_features(gt_map), tcfg)
-    conn = traversable_connected(trav, grid, sc.start_xy, sc.goal_xy)
-    conn_gt = traversable_connected(gt, grid, sc.start_xy, sc.goal_xy)
+    conn = traversable_connected(trav.lethal, grid, sc.start_xy, sc.goal_xy)
+    conn_gt = traversable_connected(gt.lethal, grid, sc.start_xy, sc.goal_xy)
     out = render_trav_panels(
         sc,
         grid,

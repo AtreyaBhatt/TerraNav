@@ -43,6 +43,7 @@ def test_frustum_corners_orientation():
     np.testing.assert_allclose(corners, expected, atol=1e-12)
 
 
+@pytest.mark.slow
 def test_every_pose_gets_its_own_actors(offscreen_gl):
     sc = generate_scenario("mixed", 0)
     poses = scan_poses(sc)
@@ -58,6 +59,7 @@ def test_every_pose_gets_its_own_actors(offscreen_gl):
     pl.close()
 
 
+@pytest.mark.slow
 def test_render_scene_writes_both_views(tmp_path, offscreen_gl):
     sc = generate_scenario("mixed", 0)
     poses = scan_poses(sc)

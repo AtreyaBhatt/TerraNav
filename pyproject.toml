@@ -31,3 +31,8 @@ packages = ["src/terranav"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: multi-seed sweeps, renders and eval smoke tests (make test skips them; make test-all runs all)",
+]

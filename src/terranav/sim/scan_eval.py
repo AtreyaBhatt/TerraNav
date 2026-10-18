@@ -98,8 +98,11 @@ def run_jobs(
 
 
 def git_revision() -> tuple[str, bool]:
-    """(HEAD commit hash, tracked files dirty?) of the current directory; ("unknown", False)
-    outside a git checkout."""
+    """(HEAD commit hash, dirty?) of the current directory; ("unknown", False) outside git.
+
+    Dirty = any tracked change OR any untracked, non-ignored file (a new source file changes
+    results too). Generated outputs live in the gitignored out/.
+    """
     import subprocess
 
     def run(*cmd: str) -> str:
@@ -107,6 +110,22 @@ def git_revision() -> tuple[str, bool]:
 
     try:
         rev = run("git", "rev-parse", "HEAD")
-        return rev, bool(run("git", "status", "--porcelain", "--untracked-files=no"))
+        return rev, bool(run("git", "status", "--porcelain"))
     except (OSError, subprocess.CalledProcessError):
         return "unknown", False
+
+
+def revision_label(allow_dirty: bool) -> str:
+    """Commit hash for result headers. Exits with an error on a dirty tree unless allow_dirty,
+    in which case it warns and returns "<hash>-dirty"."""
+    rev, dirty = git_revision()
+    print(f"git {rev}")
+    if not dirty:
+        return rev
+    if not allow_dirty:
+        raise SystemExit(
+            "error: working tree has uncommitted or untracked changes; results would not be "
+            "tied to a commit. Commit first, or pass --allow-dirty."
+        )
+    print("WARNING: --allow-dirty: results are labelled with a -dirty hash")
+    return rev + "-dirty"

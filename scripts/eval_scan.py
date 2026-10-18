@@ -7,7 +7,7 @@ np.random.default_rng((seed, i))), backproject, and measure coverage on the 0.1 
 Jobs run in worker processes (--workers 1 = serial; results are identical either way).
 Prints progress, a table of mean / min coverage per family, region and strategy, "line"
 skipped poses and the wall time, and writes the table to out/eval_scan.txt headed by the git
-commit ("-dirty" if tracked files have uncommitted changes). Numbers are measured, not targets.
+commit; refuses a dirty tree unless --allow-dirty (then the hash gets "-dirty"). Numbers are measured, not targets.
 Run: uv run python scripts/eval_scan.py [--seeds 10] [--workers N]
 """
 
@@ -22,34 +22,21 @@ for _name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 
 import argparse
 import datetime as dt
-import subprocess
 import time
 from pathlib import Path
 
 import numpy as np
 
-from terranav.sim.scan_eval import run_jobs
+from terranav.sim.scan_eval import revision_label, run_jobs
 from terranav.sim.scenario import DEFAULT_SCAN_K, FAMILIES, SCAN_STRATEGIES
 
 OUT = Path("out/eval_scan.txt")
 
 
-def git_version() -> str:
-    def run(*cmd: str) -> str:
-        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
-
-    try:
-        rev = run("git", "rev-parse", "HEAD")
-        dirty = bool(run("git", "status", "--porcelain", "--untracked-files=no"))
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-    return rev + ("-dirty" if dirty else "")
-
-
-def table(results: list[dict], seeds: int, workers: int, wall_s: float) -> str:
+def table(results: list[dict], seeds: int, workers: int, wall_s: float, rev: str) -> str:
     lines = [
         "# TerraNav scan coverage evaluation (measured)",
-        f"# git: {git_version()}",
+        f"# git: {rev}",
         f"# date: {dt.datetime.now().isoformat(timespec='seconds')}",
         (
             f"# seeds 0..{seeds - 1}, poses per strategy {DEFAULT_SCAN_K}, default SensorConfig, "
@@ -87,7 +74,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 1) - 2))
+    parser.add_argument(
+        "--allow-dirty", action="store_true", help="run on an uncommitted tree (hash gets -dirty)"
+    )
     args = parser.parse_args()
+    rev = revision_label(args.allow_dirty)
 
     jobs = [(f, s, st) for f in FAMILIES for s in range(args.seeds) for st in SCAN_STRATEGIES]
     print(f"{len(jobs)} jobs on {args.workers} worker(s)")
@@ -99,7 +90,7 @@ def main() -> None:
     results = run_jobs(jobs, args.workers, progress=progress)
     wall_s = time.perf_counter() - t0
 
-    text = table(results, args.seeds, args.workers, wall_s)
+    text = table(results, args.seeds, args.workers, wall_s, rev)
     print(text, end="")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(text)

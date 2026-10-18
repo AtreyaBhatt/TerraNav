@@ -1,10 +1,19 @@
-.PHONY: setup test lint format-check smoke-pv
+.PHONY: setup test test-all lint format-check eval smoke-pv
 
 setup:
 	uv sync
 
 test:
-	uv run pytest -v
+	uv run pytest -m "not slow"
+
+test-all:
+	uv run pytest
+
+# Evaluations, strictly one after another (each uses all cores). Refuses a dirty tree.
+eval:
+	uv run python scripts/eval_map.py
+	uv run python scripts/eval_trav.py
+	uv run python scripts/eval_trav.py --latency
 
 lint:
 	uv run ruff check src/ tests/ scripts/

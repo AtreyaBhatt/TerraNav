@@ -83,7 +83,7 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Evidence:** before the guard, filled-cell |z_mean − GT| p95 was 0.47 m (flat_obstacles) and
   0.26 m (mixed) (`out/eval_map.txt` at ab5b5a2-dirty). After (span guard, 3b8996a): 0.0028
   (flat_obstacles), 0.0124 (slopes), 0.0179 (rough), 0.0526 (steps), 0.0101 m (mixed).
-  Superseded by the plane-residual guard (D12).
+  Kept, combined with the plane-residual guard (D12).
   tests/test_hole_fill.py: a box rim stays unknown with the guard, its interior corners fill
   without it.
 
@@ -106,25 +106,58 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Alternatives:** learned or vehicle-dynamics costs; a single height-difference threshold.
 - **Reason:** three interpretable features with hard limits and a bounded, monotone cost that
   the planner can trade against distance; ground truth uses the same functions on GT heights.
-- **Evidence:** TBD from the clean `scripts/eval_trav.py` run.
+- **Change (M2-B round 2): r_step band removed.** The first version spread each cell's step to
+  all cells within r_step = 0.2 m before the 0.3 m robot dilation: double inflation. It also made
+  GT and perception disagree (GT edges got the band, unseen perceived edges are unknown and got
+  only the dilation). Now a step belongs only to the endpoints of the jumping pair; the robot's
+  extent comes only from the dilation.
+- **Evidence:** eval_trav at 3b8996a-dirty (with band): flat_obstacles perceived start-goal
+  connectivity 0.90 vs GT 1.00. The one closure, flat_obstacles seed 3 at 3ceb792, reopens if
+  either the unknown cells or the banded step cells are removed (`scripts/diag_trav.py`); without
+  the band it connects. Final numbers: TBD from the clean run.
 
 ## D11. Noise-aware features
 - **Decision:** roughness = sqrt(max(0, residual² − fit_noise_var)), where residual is the
   dof-corrected weighted plane-fit RMS and fit_noise_var = support / Σ(1/z_mean_var) (noise of the
-  fitted cell means). A neighbour jump counts as a step only if |Δz| > 3·sqrt(var_i + var_j).
+  fitted cell means). A jump counts as a step only if |Δz| > 3·sqrt(var_i + var_j) (D13).
 - **Alternatives:** raw residual and raw jumps (noise reads as roughness/steps at long range);
   subtracting per-point noise_var (overstates the noise of a many-point cell mean ~n times).
 - **Reason:** sensor noise grows as s0 + s1·z²; without these corrections far, noisy cells would
-  look rough or stepped. On a clean slope adjacent jumps stay ≤ tan(slope)·0.1·√2 (0.066 m at 25°).
+  look rough or stepped. On a clean slope pair jumps stay ≤ tan(slope)·0.2 m (0.115 m at 30°).
+  The r_step band once attached to the step feature is gone (D10).
 - **Evidence:** tests/test_features.py (iid noise: roughness ≈ σ without, ≈ 0 with the
   subtraction; bounded noise passes no steps). Pipeline numbers: TBD from the clean eval run.
 
-## D12. Fill guard v2: plane residual
-- **Decision:** `fill_gaps` fits a plane to the observed cells around each gap cell (radius 0.3 m)
-  and fills only if support ≥ 8 and residual ≤ 0.02 m (illustrative). Replaces the 0.10 m span guard.
-- **Alternatives:** span guard (D8), which also refused legitimate fills on slopes (a 25° ramp
-  spans ~0.19 m over the window).
-- **Reason:** the residual separates "tilted but planar" (fill) from steps, box rims and rough
-  ground (do not fill).
-- **Evidence:** tests/test_hole_fill.py: a striped 25° ramp fills, a striped 0.3 m step and a
-  box rim do not. Pipeline numbers: TBD from the clean eval run.
+## D12. Fill guard: span AND plane residual
+- **Decision:** `fill_gaps` fills a gap cell only if (span) the observed heights in its window
+  span ≤ `STEP_GUARD_M` = 0.10 m AND (residual) a plane fitted to the observed cells around it
+  (radius 0.3 m) has support ≥ 8 and residual ≤ `FILL_RESIDUAL_GUARD_M` = 0.02 m. Illustrative.
+- **Alternatives:** v1 span only (D8); v2 residual only.
+- **Reason:** v2 (residual only) fills a low box whose top was never seen when the observed
+  cells around it are planar ground: the hazard is erased. v1 (span only) cannot tell a planar
+  tilt from a step at small spans. The AND refuses both; the cost is that steep planes (a 25°
+  ramp spans ~0.19 m over the window) are not filled.
+- **Evidence (exploratory, not final):** filled-cell |z_mean − GT| p95 per family
+  (flat_obstacles, slopes, rough, steps, mixed): v1 at 3b8996a 0.0028 / 0.0124 / 0.0179 / 0.0526
+  / 0.0101 m; v2 at 3ceb792-dirty 0.0476 / 0.0158 / 0.0279 / 0.0842 / 0.0244 m. Diagnosis
+  (flat_obstacles seed 0): 27 of 28 box-top cells next to core false-free cells were FILLED,
+  0.237 m low (median), under v2. Core false-free cells, flat_obstacles + steps, seeds 0–9: see
+  D13 table. tests/test_hole_fill.py: 0.2-slope stripes fill, 25° stripes, a 0.3 m step, a box
+  rim and a low box top do not. Final numbers: TBD from the clean run.
+
+## D13. Step lethality: significance gate kept; pairs up to 0.2 m
+- **Decision:** a step is lethal when a jump ≥ 0.20 m is also 3-sigma significant
+  (`TraversabilityConfig.step_gate_for_lethal = True`). Jumps are measured between cell pairs up
+  to `STEP_PAIR_DIST_M` = 0.2 m apart (illustrative), endpoints only; GT uses the same function.
+- **Alternatives:** ungated raw jumps for lethality; adjacent pairs only; z_max/z_min jumps.
+- **Reason:** gate: in the diagnosis no GT step cell had a raw perceived jump ≥ 0.2 m that the
+  gate rejected, so gated and ungated results were identical; keeping the gate protects against
+  noise-driven steps at range. Pair distance: an edge inside a cell splits one jump into two
+  adjacent half-jumps (a 0.24 m box edge read as 2 × 0.12 m); pairs two cells apart see the whole
+  jump. z_max/z_min would track noise extremes, which grow with range. A 30° slope rises
+  0.115 m over 0.2 m, below step_crit.
+- **Evidence (exploratory, `scripts/diag_trav.py`, flat_obstacles + steps, seeds 0–9,
+  3ceb792-dirty; core false-free cells = GT lethal before dilation, perceived non-lethal):**
+  flat_obstacles 86 (30 GT-step) adjacent pairs + v2 guard → 45 (30) with 0.2 m pairs → 28 (15)
+  with the AND guard; steps 81 → 81 → 64 (all GT-rough). Gate on/off identical in all three runs.
+  Final numbers: TBD from the clean run.

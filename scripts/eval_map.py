@@ -23,7 +23,6 @@ for _name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
 import argparse
 import datetime as dt
 import platform
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -31,7 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from terranav.sim.map_eval import GOAL_VISIBLE_FRACTION, evaluate_map_job, perception_latency_s
-from terranav.sim.scan_eval import run_parallel
+from terranav.sim.scan_eval import revision_label, run_parallel
 from terranav.sim.scenario import DEFAULT_SCAN_K, FAMILIES, SCAN_STRATEGIES
 
 OUT = Path("out/eval_map.txt")
@@ -39,17 +38,6 @@ OUT_LATENCY = Path("out/eval_map_latency.txt")
 STRATEGY = SCAN_STRATEGIES[0]  # the default survey
 LATENCY_SEEDS = 5
 LATENCY_REPEATS = 3
-
-
-def git_version() -> tuple[str, bool]:
-    def run(*cmd: str) -> str:
-        return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
-
-    try:
-        rev = run("git", "rev-parse", "HEAD")
-        return rev, bool(run("git", "status", "--porcelain", "--untracked-files=no"))
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown", False
 
 
 def pct(a, q: float) -> float:
@@ -128,13 +116,12 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 1) - 2))
     parser.add_argument("--latency", action="store_true", help="serial perception timing only")
+    parser.add_argument(
+        "--allow-dirty", action="store_true", help="run on an uncommitted tree (hash gets -dirty)"
+    )
     args = parser.parse_args()
 
-    rev, dirty = git_version()
-    print(f"git {rev}")
-    if dirty:
-        print("WARNING: working tree has uncommitted changes; results are not tied to a commit")
-        rev += "-dirty"
+    rev = revision_label(args.allow_dirty)
 
     t0 = time.perf_counter()
     if args.latency:

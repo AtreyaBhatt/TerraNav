@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from terranav.sim.scan_eval import git_revision, run_parallel
+from terranav.sim.scan_eval import revision_label, run_parallel
 from terranav.sim.scenario import DEFAULT_SCAN_K, FAMILIES, SCAN_STRATEGIES
 from terranav.sim.trav_eval import evaluate_trav_job, trav_latency_s
 
@@ -56,8 +56,15 @@ def header(title: str, rev: str, extra: list[str]) -> list[str]:
     ]
 
 
-def ratio(num: float, den: float) -> float:
-    return num / den if den else float("nan")
+def rate(num: float, den: float, fmt: str = ".3f") -> str:
+    """num / den formatted, or "n/a (0)" when the denominator is zero."""
+    return format(num / den, fmt) if den else "n/a (0)"
+
+
+def pooled(rs: list[dict]) -> dict[str, float]:
+    """Sum every numeric (non-bool) field over a family's scenarios."""
+    keys = [k for k, v in rs[0].items() if isinstance(v, int | float) and not isinstance(v, bool)]
+    return {k: float(sum(r[k] for r in rs)) for k in keys if k != "seed"}
 
 
 def accuracy_table(results: list[dict], seeds: int, workers: int, wall_s: float, rev: str) -> str:
@@ -66,28 +73,43 @@ def accuracy_table(results: list[dict], seeds: int, workers: int, wall_s: float,
         rev,
         [
             f"# seeds 0..{seeds - 1}; {len(results)} jobs, {workers} worker(s), wall {wall_s:.1f} s",
-            "# rates and MAEs pooled over corridor cells (<= 3 m from the start-goal segment)",
-            "# false-free = P(perceived free | GT lethal); false-lethal = P(lethal | GT free)",
+            "# all counts / rates / MAEs pooled over corridor cells (<= 3 m from start-goal)",
+            "# core FF  = P(perceived non-lethal | GT lethal before dilation)  [safety]",
+            "# band FF  = P(perceived non-lethal | GT lethal after dilation)",
+            "# FL       = P(perceived lethal | GT non-lethal), split by the perceived cell's own",
+            "#            reason: unknown | no estimate (support) | feature >= crit | dilation only",
             "# conn: share of scenarios with start-goal connected through non-lethal cells",
         ],
     )
     lines.append(
-        f"{'family':<15} {'false-free':>10} {'false-leth':>10} {'cost MAE':>9} "
-        f"{'slope MAE':>10} {'rough MAE':>10} {'step MAE':>9} {'conn perc':>9} {'conn GT':>8}"
+        f"{'family':<15} {'GT core':>8} {'GT leth':>8} {'GT free':>8} {'core FF':>9} "
+        f"{'band FF':>9} {'FL':>7} {'FL unkn':>8} {'FL supp':>8} {'FL feat':>8} {'FL dil':>8}"
     )
     for family in FAMILIES:
-        rs = [r for r in results if r["family"] == family]
-        # Pool every count / error sum over the family's scenarios.
-        counted = [k for k, v in rs[0].items() if k != "seed" and isinstance(v, int | float)]
-        tot = {k: float(sum(r[k] for r in rs)) for k in counted if not isinstance(rs[0][k], bool)}
-
+        t = pooled([r for r in results if r["family"] == family])
+        free = t["gt_free"]
         lines.append(
-            f"{family:<15} {ratio(tot['false_free'], tot['gt_lethal']):>10.3f} "
-            f"{ratio(tot['false_lethal'], tot['gt_free']):>10.3f} "
-            f"{ratio(tot['cost_abs_sum'], tot['cost_n']):>9.4f} "
-            f"{ratio(tot['slope_rad_abs_sum'], tot['slope_rad_n']):>8.2f}deg "
-            f"{ratio(tot['roughness_m_abs_sum'], tot['roughness_m_n']):>10.4f} "
-            f"{ratio(tot['step_m_abs_sum'], tot['step_m_n']):>9.4f} "
+            f"{family:<15} {t['gt_core']:>8.0f} {t['gt_lethal']:>8.0f} {free:>8.0f} "
+            f"{rate(t['core_false_free'], t['gt_core']):>9} "
+            f"{rate(t['band_false_free'], t['gt_lethal']):>9} {rate(t['false_lethal'], free):>7} "
+            f"{rate(t['fl_unknown'], free):>8} {rate(t['fl_no_estimate'], free):>8} "
+            f"{rate(t['fl_feature'], free):>8} {rate(t['fl_dilation'], free):>8}"
+        )
+    lines += [
+        "",
+        (
+            f"{'family':<15} {'cost MAE':>9} {'slope MAE':>10} {'rough MAE':>10} "
+            f"{'step MAE':>9} {'conn perc':>9} {'conn GT':>8}"
+        ),
+    ]
+    for family in FAMILIES:
+        rs = [r for r in results if r["family"] == family]
+        t = pooled(rs)
+        lines.append(
+            f"{family:<15} {rate(t['cost_abs_sum'], t['cost_n'], '.4f'):>9} "
+            f"{rate(t['slope_rad_abs_sum'], t['slope_rad_n'], '.2f'):>7}deg "
+            f"{rate(t['roughness_m_abs_sum'], t['roughness_m_n'], '.4f'):>10} "
+            f"{rate(t['step_m_abs_sum'], t['step_m_n'], '.4f'):>9} "
             f"{np.mean([r['connected_perceived'] for r in rs]):>9.2f} "
             f"{np.mean([r['connected_gt'] for r in rs]):>8.2f}"
         )
@@ -121,13 +143,12 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 1) - 2))
     parser.add_argument("--latency", action="store_true", help="serial feature/trav timing only")
+    parser.add_argument(
+        "--allow-dirty", action="store_true", help="run on an uncommitted tree (hash gets -dirty)"
+    )
     args = parser.parse_args()
 
-    rev, dirty = git_revision()
-    print(f"git {rev}")
-    if dirty:
-        print("WARNING: working tree has uncommitted changes; results are not tied to a commit")
-        rev += "-dirty"
+    rev = revision_label(args.allow_dirty)
     t0 = time.perf_counter()
     if args.latency:
         text, out = run_latency(rev), OUT_LATENCY

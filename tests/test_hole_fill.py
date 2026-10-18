@@ -35,18 +35,22 @@ GAP_ROWS = np.array([r for r in range(117) if r % 3])
 INNER_COLS = slice(1, 119)
 
 
-def striped(z_of_col) -> tuple:
+def striped_fill(z_of_col, **guards):
     """Observed every 3rd row (0, 3, ..., 117), one point per cell; 2-row (0.2 m) gaps."""
     rr, cc = np.meshgrid(np.arange(0, 120, 3), np.arange(120), indexing="ij")
     rows, cols = rr.ravel(), cc.ravel()
-    return fill_gaps(map_with_cells(rows, cols, z_of_col(cols)))
+    return fill_gaps(map_with_cells(rows, cols, z_of_col(cols)), **guards)
 
 
-@pytest.mark.parametrize("slope", [0.2, np.tan(np.radians(25.0))], ids=["0.2", "25deg"])
-def test_fill_rows_on_inclined_plane(slope):
-    # z = slope * x, x = (col + 0.5) * 0.1. The plane residual is ~0, so every gap cell away
-    # from the first/last column fills (a 25 deg ramp too: v1's span guard refused it).
+def striped(z_of_col):
+    return striped_fill(z_of_col)
+
+
+def test_fill_rows_on_inclined_plane():
+    # z = 0.2 x, x = (col + 0.5) * 0.1. The window spans 0.4 m in x -> 0.08 m <= STEP_GUARD_M,
+    # and the plane residual is ~0, so every gap cell away from the first/last column fills.
     # Rows 118-119 lie outside the last observed row (not a gap).
+    slope = 0.2
     m = striped(lambda cols: slope * (cols + 0.5) * 0.1)
     gap = m.source[GAP_ROWS, INNER_COLS]
     assert np.all(gap == FILLED)
@@ -62,6 +66,17 @@ def test_fill_rows_on_inclined_plane(slope):
     np.testing.assert_allclose(m.z_mean_var[GAP_ROWS, INNER_COLS], 1e-4)
     assert np.all(m.source[118:, :] == UNKNOWN)
     assert np.all(m.source[::3, :][:40] == OBSERVED)
+
+
+def test_steep_ramp_is_not_filled():
+    # 25 deg ramp: planar (residual ~0, the residual guard alone would fill), but its window
+    # spans 0.4 m * tan(25 deg) = 0.187 m > STEP_GUARD_M, so the span guard refuses it.
+    m = striped(lambda cols: np.tan(np.radians(25.0)) * (cols + 0.5) * 0.1)
+    assert not (m.source == FILLED).any()
+    unguarded = striped_fill(
+        lambda cols: np.tan(np.radians(25.0)) * (cols + 0.5) * 0.1, step_guard_m=np.inf
+    )
+    assert np.all(unguarded.source[GAP_ROWS, INNER_COLS] == FILLED)
 
 
 def test_step_edge_is_not_filled_across():
@@ -131,7 +146,9 @@ def test_box_rim_fills_without_guard():
     rr, cc = np.nonzero(rim)
     rows, cols = np.concatenate([gr, rr]), np.concatenate([gc, cc])
     z = np.concatenate([np.zeros(len(gr)), np.full(len(rr), 0.5)])
-    unguarded = fill_gaps(map_with_cells(rows, cols, z), residual_guard_m=np.inf)
+    unguarded = fill_gaps(
+        map_with_cells(rows, cols, z), step_guard_m=np.inf, residual_guard_m=np.inf
+    )
     guarded = fill_gaps(map_with_cells(rows, cols, z))
     for corner in ((51, 51), (51, 58), (58, 51), (58, 58)):
         assert unguarded.source[corner] == FILLED
@@ -168,3 +185,27 @@ def test_ground_truth_elevation_block_mean_and_box_top():
     expected[40:50, 20:30] = 0.8
     np.testing.assert_allclose(gt, expected, atol=1e-12)
     assert gt[45, 19] == pytest.approx(0.01 * 38.5)  # centre x = 1.95: not covered
+
+
+def test_low_box_top_inside_planar_ground_is_not_filled():
+    # Flat observed ground (z = 0) and a 0.25 m box whose rim was seen (z_min 0, z_max 0.25)
+    # but whose top is a 2-cell unobserved gap. Shape: rows 60..63, cols 60..63 is the box;
+    # its inner 2 x 2 (rows/cols 61..62) is unobserved. The rim cells' MEANS are set to 0 (as
+    # if dominated by ground returns), so a plane fits the neighbourhood perfectly and the
+    # residual guard alone would fill the top as ground; the span guard (0.25 > 0.10) refuses.
+    gap = np.zeros((120, 120), dtype=bool)
+    gap[61:63, 61:63] = True
+    rim = np.zeros_like(gap)
+    rim[60:64, 60:64] = True
+    rim &= ~gap
+    rr, cc = np.nonzero(~gap)
+    pts = np.column_stack([(cc + 0.5) * 0.1, (rr + 0.5) * 0.1, np.zeros(len(rr))])
+    tops = np.column_stack([(np.nonzero(rim)[1] + 0.5) * 0.1, (np.nonzero(rim)[0] + 0.5) * 0.1])
+    # Rim cells get two extra points, 0.25 and -0.25: their mean stays 0, their span is 0.5 m.
+    extra = np.vstack([np.column_stack([tops, np.full(len(tops), z)]) for z in (0.25, -0.25)])
+    allp = np.vstack([pts, extra])
+    m = fuse_points(allp, np.full(len(allp), 0.01), MAP)
+    guarded = fill_gaps(m)
+    assert np.all(guarded.source[gap] == UNKNOWN)
+    residual_only = fill_gaps(m, step_guard_m=np.inf)
+    assert np.all(residual_only.source[gap] == FILLED)

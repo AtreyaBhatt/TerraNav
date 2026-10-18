@@ -11,6 +11,15 @@ from scipy import ndimage
 from terranav.perception.elevation_map import UNKNOWN, ElevationMap
 from terranav.perception.features import TerrainFeatures
 from terranav.perception.plane_fit import disk_offsets
+from terranav.types import GridSpec
+
+# core_reason bits (uint8): why a cell is lethal BEFORE robot-radius dilation.
+R_UNKNOWN = 1  # map cell unknown
+R_NO_ESTIMATE = 2  # known, but a feature is NaN (insufficient plane-fit support)
+R_SLOPE = 4  # slope >= slope_crit
+R_ROUGH = 8  # roughness >= rough_crit
+R_STEP = 16  # step >= step_crit (gated or raw, see step_gate_for_lethal)
+R_FEATURE = R_SLOPE | R_ROUGH | R_STEP
 
 
 @dataclass(frozen=True)
@@ -24,45 +33,66 @@ class TraversabilityConfig:
     w_rough: float = 0.3
     w_step: float = 0.3
     robot_radius_m: float = 0.3  # lethal cells are grown by this disk (robot footprint)
+    # True: a step is lethal only if the jump is >= step_crit AND 3-sigma significant.
+    # False: any raw adjacent jump >= step_crit is lethal. The cost term always uses the gated step.
+    step_gate_for_lethal: bool = True
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Traversability:
-    """lethal: (ny, nx) bool; cost: (ny, nx) float in [0, 1), NaN where lethal. Read-only."""
+    """Read-only (ny, nx) arrays.
+
+    lethal: bool, core lethal cells dilated by the robot radius.
+    core_reason: uint8 bitmask of R_* reasons per cell before dilation (0 = not core lethal).
+    cost: float in [0, 1), NaN where lethal.
+    """
 
     lethal: np.ndarray
+    core_reason: np.ndarray
     cost: np.ndarray
 
     def __post_init__(self) -> None:
-        for name, dtype in (("lethal", bool), ("cost", np.float64)):
+        for name, dtype in (("lethal", bool), ("core_reason", np.uint8), ("cost", np.float64)):
             arr = np.array(getattr(self, name), dtype=dtype, copy=True)
             arr.setflags(write=False)
             object.__setattr__(self, name, arr)
 
 
+def dilate_lethal(core: np.ndarray, grid: GridSpec, robot_radius_m: float) -> np.ndarray:
+    """Grow core-lethal cells by a robot_radius_m disk (cells outside the map do not count)."""
+    disk, _, _ = disk_offsets(math.floor(robot_radius_m / grid.resolution + 1e-9))
+    return ndimage.binary_dilation(core, structure=disk)
+
+
 def traversability(
     emap: ElevationMap, features: TerrainFeatures, cfg: TraversabilityConfig
 ) -> Traversability:
-    """Lethal mask and cost.
+    """Lethal mask, core reasons and cost.
 
-    lethal = unknown | any feature NaN (insufficient support) | slope >= slope_crit |
-             roughness >= rough_crit | step >= step_crit, then dilated by a robot_radius_m disk
-             (cells outside the map do not count as lethal; the planner stays on the map).
-    cost   = w_slope * slope/slope_crit + w_rough * rough/rough_crit + w_step * step/step_crit,
-             clipped to [0, 1); NaN where lethal.
+    core lethal = unknown | any feature NaN (insufficient support) | slope >= slope_crit |
+                  roughness >= rough_crit | step >= step_crit, where step is the 3-sigma gated
+                  step_m (step_gate_for_lethal) or the raw step_raw_m;
+    lethal      = core lethal dilated by a robot_radius_m disk (dilate_lethal);
+    cost        = w_slope*slope/slope_crit + w_rough*rough/rough_crit + w_step*step_m/step_crit
+                  (gated step), clipped to [0, 1); NaN where lethal.
     """
     slope_crit = math.radians(cfg.slope_crit_deg)
     slope, rough, step = features.slope_rad, features.roughness_m, features.step_m
-    nan = np.isnan(slope) | np.isnan(rough) | np.isnan(step)
-    with np.errstate(invalid="ignore"):  # NaN comparisons are False; NaN cells are lethal
-        too_much = (slope >= slope_crit) | (rough >= cfg.rough_crit_m) | (step >= cfg.step_crit_m)
-    core = (emap.source == UNKNOWN) | nan | too_much
-    disk, _, _ = disk_offsets(math.floor(cfg.robot_radius_m / emap.grid.resolution + 1e-9))
-    lethal = ndimage.binary_dilation(core, structure=disk)
+    step_lethal = step if cfg.step_gate_for_lethal else features.step_raw_m
+    reason = np.zeros(slope.shape, dtype=np.uint8)
+    unknown = emap.source == UNKNOWN
+    reason[unknown] |= R_UNKNOWN
+    no_estimate = ~unknown & (np.isnan(slope) | np.isnan(rough) | np.isnan(step))
+    reason[no_estimate] |= R_NO_ESTIMATE
+    with np.errstate(invalid="ignore"):  # NaN comparisons are False; NaN cells are core anyway
+        reason[slope >= slope_crit] |= R_SLOPE
+        reason[rough >= cfg.rough_crit_m] |= R_ROUGH
+        reason[step_lethal >= cfg.step_crit_m] |= R_STEP
+    lethal = dilate_lethal(reason != 0, emap.grid, cfg.robot_radius_m)
     cost = (
         cfg.w_slope * slope / slope_crit
         + cfg.w_rough * rough / cfg.rough_crit_m
         + cfg.w_step * step / cfg.step_crit_m
     )
     cost = np.clip(cost, 0.0, np.nextafter(1.0, 0.0))
-    return Traversability(lethal=lethal, cost=np.where(lethal, np.nan, cost))
+    return Traversability(lethal=lethal, core_reason=reason, cost=np.where(lethal, np.nan, cost))

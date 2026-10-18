@@ -126,6 +126,7 @@ def test_start_goal_disks_flat_and_clear(family, seed):
 
 
 @pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.slow  # multi-seed
 @pytest.mark.parametrize("seed", SEEDS_50)
 def test_start_goal_surroundings_at_base_height(family, seed):
     sc = generate_scenario(family, seed, CFG)
@@ -152,6 +153,7 @@ def test_flat_obstacles_has_boxes_and_flat_terrain():
 
 
 @pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.slow  # multi-seed
 @pytest.mark.parametrize("seed", SEEDS_50)
 def test_goal_reachable_over_easy_terrain(family, seed):
     sc = generate_scenario(family, seed, CFG)
@@ -164,6 +166,7 @@ def test_goal_reachable_over_easy_terrain(family, seed):
 
 
 @pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.slow  # multi-seed
 @pytest.mark.parametrize("seed", SEEDS_50)
 def test_straight_line_is_obstructed(family, seed):
     sc = generate_scenario(family, seed, CFG)
@@ -198,6 +201,7 @@ def feature_bbox(f) -> tuple[float, float, float, float]:
 
 
 @pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.slow  # multi-seed
 @pytest.mark.parametrize("seed", SEEDS_50)
 def test_features_do_not_overlap_and_stay_in_band(family, seed):
     feats = generate_scenario(family, seed, CFG).params["features"]
@@ -210,6 +214,7 @@ def test_features_do_not_overlap_and_stay_in_band(family, seed):
             assert not (a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3])
 
 
+@pytest.mark.slow  # 60 hypothesis seeds
 @settings(deadline=None, max_examples=60)
 @given(seed=st.integers(min_value=0, max_value=2**31 - 1), family=st.sampled_from(FAMILIES))
 def test_generation_succeeds_for_any_seed(seed, family):
@@ -390,6 +395,7 @@ def clearance_ok(sc, x: float, y: float) -> bool:
 
 
 @pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.slow  # multi-seed
 @pytest.mark.parametrize("seed", SEEDS_50)
 def test_flank_poses_placed_on_clear_easy_ground(family, seed):
     sc = generate_scenario(family, seed, CFG)
@@ -403,6 +409,7 @@ def test_flank_poses_placed_on_clear_easy_ground(family, seed):
         assert abs(z - 0.5 - sc.world.heightfield[r, c]) < 0.05
 
 
+@pytest.mark.slow  # captures from every pose of 10 scenarios
 @pytest.mark.parametrize("family", FAMILIES)
 @pytest.mark.parametrize("seed", [0, 1])
 def test_capture_succeeds_from_every_flank_pose(family, seed):

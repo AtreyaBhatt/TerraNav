@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from terranav.sim.scan_eval import run_jobs
 from terranav.types import SensorConfig
 
@@ -11,6 +13,7 @@ SENSOR = SensorConfig(width=48, height=36)
 JOBS = [("mixed", 0, "flank"), ("steps", 1, "line")]
 
 
+@pytest.mark.slow
 def test_parallel_matches_serial():
     serial = run_jobs(JOBS, workers=1, sensor=SENSOR)
     parallel = run_jobs(JOBS, workers=2, sensor=SENSOR)
@@ -20,6 +23,7 @@ def test_parallel_matches_serial():
         assert 0.0 < r["corridor"] <= 1.0 and 0.0 < r["reachable"] <= 1.0
 
 
+@pytest.mark.slow
 def test_map_eval_job_smoke():
     from terranav.sim.map_eval import evaluate_map_job
 
@@ -58,11 +62,27 @@ def test_known_connected_hand_built():
     assert not known_connected(emap(src), (0.5, 1.5), (2.5, 2.5))  # goal cell unknown
 
 
+@pytest.mark.slow
 def test_trav_eval_job_smoke():
-    from terranav.sim.trav_eval import evaluate_trav_job
+    from terranav.sim.trav_eval import FL_CAUSES, evaluate_trav_job
 
     r = evaluate_trav_job(("mixed", 0, "flank+start"), sensor=SENSOR)
-    assert 0 <= r["false_free"] <= r["gt_lethal"] and 0 <= r["false_lethal"] <= r["gt_free"]
-    assert r["gt_lethal"] + r["gt_free"] > 0 and r["cost_n"] <= r["gt_free"]
+    assert 0 <= r["core_false_free"] <= r["gt_core"] <= r["gt_lethal"]
+    assert 0 <= r["band_false_free"] <= r["gt_lethal"]
+    assert 0 <= r["false_lethal"] <= r["gt_free"] and r["cost_n"] <= r["gt_free"]
+    assert r["false_lethal"] == sum(r[f"fl_{c}"] for c in FL_CAUSES)  # causes partition FL
     assert isinstance(r["connected_perceived"], bool) and isinstance(r["connected_gt"], bool)
     assert r["connected_gt"]  # GT must allow a route: scenarios guarantee easy reachability
+
+
+def test_false_lethal_cause_priority():
+    import numpy as np
+
+    from terranav.perception.traversability import R_NO_ESTIMATE, R_STEP, R_UNKNOWN
+    from terranav.sim.trav_eval import FL_CAUSES, false_lethal_cause
+
+    reason = np.array(
+        [[0, R_STEP, R_NO_ESTIMATE, R_UNKNOWN, R_UNKNOWN | R_NO_ESTIMATE]], dtype=np.uint8
+    )
+    names = [FL_CAUSES[i] for i in false_lethal_cause(reason)[0]]
+    assert names == ["dilation", "feature", "no_estimate", "unknown", "unknown"]

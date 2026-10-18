@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -91,6 +92,7 @@ SMALL_SENSOR = SensorConfig(
 FLAT = World(np.zeros((GRID.ny, GRID.nx)), GRID, (), "flat", 0)
 
 
+@pytest.mark.slow  # 40-example hypothesis sweep
 @settings(deadline=None, max_examples=40)
 @given(
     x=st.floats(1.5, 10.5),

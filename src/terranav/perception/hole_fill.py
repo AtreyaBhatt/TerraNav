@@ -25,8 +25,13 @@ from terranav.perception.plane_fit import plane_fit
 
 # ILLUSTRATIVE: widest unobserved gap (m) that is bridged by interpolation.
 MAX_GAP_M = 0.3
-# ILLUSTRATIVE: no fill where the observed cells around a gap deviate from a plane by more
-# than this RMS (m): steps, box rims whose tops were never seen, rough ground.
+# Fill guards, BOTH must pass (see docs/decisions.md D12). ILLUSTRATIVE values.
+# Span: no fill where observed heights in the fill window span more than this (m). Catches
+# low boxes whose unseen tops sit inside otherwise planar ground. Also refuses steep planes
+# (a 25 deg ramp spans ~0.19 m over the 0.4 m window).
+STEP_GUARD_M = 0.10
+# Residual: no fill where the observed cells around the gap deviate from a plane by more than
+# this RMS (m): steps, box rims, rough ground.
 FILL_RESIDUAL_GUARD_M = 0.02
 # Robot footprint radius (m) marked as known around the start pose.
 FOOTPRINT_RADIUS_M = 0.4
@@ -40,6 +45,7 @@ def _disk(r: int) -> np.ndarray:
 def fill_gaps(
     emap: ElevationMap,
     max_gap_m: float = MAX_GAP_M,
+    step_guard_m: float = STEP_GUARD_M,
     residual_guard_m: float = FILL_RESIDUAL_GUARD_M,
 ) -> ElevationMap:
     """Fill unobserved cells inside gaps up to max_gap_m wide (metres).
@@ -47,14 +53,16 @@ def fill_gaps(
     r = ceil(max_gap_m / 2 / res) cells.
     fillable = binary_closing(observed, disk(r)) & ~observed, computed on a map padded by r
         cells replicating its edge, so the map border neither creates nor erodes gaps.
-    Guard: a weighted plane is fitted to the OBSERVED cells around each gap cell (plane_fit,
-    default radius, MIN_SUPPORT); the cell is NOT filled if that fit has insufficient support
-    or a residual > residual_guard_m.
-    Window = the (2r+1)^2 square around the cell.
+    Window = the (2r+1)^2 square around the cell; lo / hi = min z_min / max z_max over the
+    observed cells in it.
+    Guards (a cell is filled only if ALL hold):
+      span:     hi - lo <= step_guard_m;
+      residual: a weighted plane fitted to the OBSERVED cells around the cell (plane_fit,
+                default radius) has support >= MIN_SUPPORT and residual <= residual_guard_m.
     z_mean: normalized convolution, sum(G * observed * z_mean) / sum(G * observed), with a
         Gaussian G of sigma r/3 cells truncated at 3 sigma, i.e. exactly the window.
-    z_min / z_max = min z_min / max z_max over the observed cells in the window;
-    z_mean_var = their largest z_mean_var (conservative). Filled cells keep count 0 (z_var,
+    z_min / z_max = lo / hi; z_mean_var = the window's largest observed z_mean_var
+    (conservative). Filled cells keep count 0 (z_var,
     noise_var stay NaN) and get source FILLED.
     """
     res = emap.grid.resolution
@@ -67,17 +75,16 @@ def fill_gaps(
     fillable = closed & ~observed
     if not fillable.any():
         return emap
-    fit = plane_fit(emap, mask=emap.source == OBSERVED)
-    with np.errstate(invalid="ignore"):  # NaN residual (no fit) -> comparison False
-        fillable &= fit.residual_m <= residual_guard_m
-    if not fillable.any():
-        return emap
-
     window = np.ones((2 * r + 1, 2 * r + 1), dtype=bool)
     # Every closed cell has an observed cell within disk(r), so these are finite there.
     lo = ndimage.minimum_filter(np.where(observed, emap.z_min, np.inf), footprint=window)
     hi = ndimage.maximum_filter(np.where(observed, emap.z_max, -np.inf), footprint=window)
     var = ndimage.maximum_filter(np.where(observed, emap.z_mean_var, -np.inf), footprint=window)
+    fit = plane_fit(emap, mask=emap.source == OBSERVED)
+    with np.errstate(invalid="ignore"):  # inf - inf / NaN residual -> comparison False
+        fillable &= (hi - lo <= step_guard_m) & (fit.residual_m <= residual_guard_m)
+    if not fillable.any():
+        return emap
 
     sigma = r / 3.0
     z_obs = np.where(observed, emap.z_mean, 0.0)

@@ -1,4 +1,4 @@
-.PHONY: setup test test-all lint format-check eval smoke-pv
+.PHONY: setup test test-all lint format-check eval latency smoke-pv
 
 setup:
 	uv sync
@@ -9,13 +9,17 @@ test:
 test-all:
 	uv run pytest
 
-# Evaluations, strictly one after another (each uses all cores). Refuses a dirty tree.
+# Table evaluations, strictly one after another (each uses all cores). Refuse a dirty tree.
 eval:
+	uv run python scripts/eval_scan.py
 	uv run python scripts/eval_map.py
-	uv run python scripts/eval_map.py --latency
 	uv run python scripts/eval_trav.py
-	uv run python scripts/eval_trav.py --latency
 	uv run python scripts/eval_plan.py
+
+# Serial latency measurements. Run only when perception or planning code changed.
+latency:
+	uv run python scripts/eval_map.py --latency
+	uv run python scripts/eval_trav.py --latency
 	uv run python scripts/eval_plan.py --latency
 
 lint:

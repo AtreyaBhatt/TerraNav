@@ -135,3 +135,36 @@ def test_steep_slope_is_measured_as_slope():
     m = evaluate_path(scenario(hf), path((2.0, 6.0), (4.0, 6.0)), LIMITS)
     assert m.max_slope_deg == pytest.approx(35.0, abs=1e-6)
     assert m.violations == ("slope",)
+
+
+def test_ramp_slope_unchanged_by_smoothing_away_from_edges():
+    # 20 deg frustum ramp (4 x 4 m footprint, top at 0.6 m): along the centre line of one face,
+    # away from the footprint edge and the plateau kink, the smoothed slope is the face slope.
+    from terranav.sim.world import add_ramp
+
+    hf = add_ramp(
+        np.zeros((TERRAIN.ny, TERRAIN.nx)), TERRAIN, (6.0, 6.0), (4.0, 4.0), 0.0, 20.0, 0.6
+    )
+    # face x in [4, 5.65] (rises 0.364 m/m until 0.6 m); sample x in [4.4, 5.2] on y = 6
+    m = evaluate_path(scenario(hf), path((4.4, 6.0), (5.2, 6.0)), LIMITS)
+    assert m.max_slope_deg == pytest.approx(20.0, abs=0.5)
+    assert m.max_pitch_deg == pytest.approx(20.0, abs=0.5)
+    assert m.max_slope_raw_deg == pytest.approx(20.0, abs=0.5)
+
+
+def test_texture_slope_is_smoothed_away():
+    # Texture z = 0.05 sin(2 pi x / 0.4) sin(2 pi y / 0.4) (0.4 m wavelength, k = 15.7 /m). Raw
+    # gradient max ~ A k = 0.785, times the central-difference factor sin(kh)/(kh) = 0.90 for
+    # h = 0.05 m: ~0.71, about 35 deg. Adjacent cells differ by <= 2A sin(kh/2) = 0.038 m < the
+    # 40 deg step threshold (0.042 m), so the texture is a surface, not steps. A 0.1 m Gaussian
+    # damps each direction by exp(-k^2 sigma^2 / 2) = 0.29; the product texture by 0.29^2 = 0.085:
+    # about 3 deg (measured 31.1 deg raw, 2.9 deg smoothed along the crest line).
+    xs = (np.arange(TERRAIN.nx) + 0.5) * TERRAIN.resolution
+    X, Y = np.meshgrid(xs, xs, indexing="xy")
+    hf = 0.05 * np.sin(2 * np.pi * X / 0.4) * np.sin(2 * np.pi * Y / 0.4)
+    # Along the crest line y = 6.1 (sin(k y) = 1) the gradient reaches A k: a diagonal path
+    # would only see A k / 2 (~26 deg raw).
+    m = evaluate_path(scenario(hf), path((3.0, 6.1), (9.0, 6.1)), LIMITS)
+    assert m.max_slope_raw_deg > 30.0
+    assert m.max_slope_deg < 15.0
+    assert "slope" not in m.violations

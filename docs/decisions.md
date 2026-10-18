@@ -218,6 +218,8 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Impact:** measured by `scripts/eval_plan.py` (independent evaluator, D19) as the collision /
   rise violation rate of planned paths, not just as a cell rate. Numbers: TBD from the clean run.
 
+- **Update:** addressed by the in-cell span step (D20); family-level effect TBD from the clean run.
+
 ## D16. Planner design
 - **Decision:** grid A* on the 0.1 m traversability map (`planning/astar.py`): 8-connected, no
   corner cutting (a diagonal is refused if either orthogonal cell it passes is lethal); edge cost
@@ -238,6 +240,12 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   the four rendered scenarios (`scripts/render_plans.py`, A* + smoothing, single process):
   4.6–12.7 ms per plan, 340–2063 expansions.
 
+- **Limitation:** A* is optimal on the 8-connected grid graph, not in the plane: its paths are
+  limited to 45° headings, and shortcutting only removes vertices along the found path, so the
+  result can be longer than the Euclidean-optimal path in the same cost field. Any-angle planners
+  (Theta*, Lazy Theta*, Field D*) are the alternative if this matters; the length ratios against
+  Oracle compare planners under the same limitation.
+
 ## D17. Planner comparison design
 - **Decision:** three planners differing only in their input (`planning/planners.py`):
   TerraNav = perceived traversability, graded (cost-weighted); Baseline-Occ = perceived
@@ -248,8 +256,25 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   occlusion, unknown = blocked) with the same planner. Baseline-Occ vs Oracle: both effects
   together.
 - **Reason:** changing one factor per pair makes differences attributable.
-- **Evidence:** TBD, to be filled from the clean `scripts/eval_plan.py` run (section B: paired
-  differences with bootstrap CIs).
+- **Evidence (aeb08ea, `out/eval_plan.txt`, seeds 0–9, PRE-FIX: before the D20 vertical-surface
+  step and the D21 slope scale):** success 1.00 for every planner and family. Violation rates
+  (terranav / baseline_occ / oracle): flat_obstacles 0.00 / 0.10 / 0.00 (collision), slopes
+  0.00 / 0.00 / 0.00, rough 0.00 / 0.10 / 0.00 (slope), steps 0.00 / 0.00 / 0.00, mixed
+  0.10 / 0.10 / 0.00 (collision). Paired TerraNav − Baseline-Occ, mean difference [95% CI]
+  (better/equal/worse):
+  - rough: rough exposure −0.1511 [−0.1896, −0.1185] (10/0/0); max rise −0.0567
+    [−0.0735, −0.0413] (10/0/0); length +0.4828 [+0.3665, +0.6196] (0/0/10).
+  - slopes: max rise −0.0248 [−0.0371, −0.0132] (10/0/0); length +0.2154 [+0.1000, +0.3393]
+    (2/0/8).
+  - steps: max rise −0.0388 [−0.0719, −0.0092] (4/6/0); length +0.0489 [−0.0305, +0.1517] (3/0/7).
+  - mixed: max rise −0.0388 [−0.0700, −0.0136] (7/3/0); rough exposure −0.0021 [−0.0251, +0.0188]
+    (2/7/1); length +0.1946 [+0.0776, +0.3404] (2/0/8).
+  - flat_obstacles: length −0.0319 [−0.0937, +0.0370] (7/0/3); rough exposure and max rise 0.
+  Paired TerraNav − Oracle length: flat_obstacles +0.2643 [+0.1557, +0.3856] (0/0/10), slopes
+  +0.0009 [−0.0839, +0.0944] (6/0/4), rough +0.1272 [+0.0243, +0.2944] (1/1/8), steps +0.1398
+  [+0.0020, +0.3215] (3/0/7), mixed +0.0367 [−0.1132, +0.1753] (3/0/7). Median length ratio vs
+  Oracle: terranav 1.016 / 0.999 / 1.005 / 1.006 / 1.008, baseline_occ 1.026 / 0.987 / 0.968 /
+  1.008 / 0.985 (flat_obstacles / slopes / rough / steps / mixed). Post-fix numbers: TBD.
 
 ## D18. Evaluation must be independent of the traversability definitions
 - **Decision:** the M3-B path evaluator will judge paths against the simulated world directly
@@ -289,3 +314,40 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   35° plane is a slope violation). First use (render, flat_obstacles seed 0, dirty tree):
   Baseline-Occ passes 0.232 m from the 0.27 m-high box (collision) and TerraNav 0.308 m: the D15
   residual reaching an actual path.
+
+## D20. Vertical-surface step (in-cell span)
+- **Decision:** for OBSERVED cells with ≥ 2 points, the cell's own height span z_max − z_min is
+  a step when span > `K_SPAN` · sqrt(noise_var) · sqrt(2 ln max(n, 2)) (`K_SPAN` = 2.0,
+  illustrative); then step = max(pair step, span). FILLED and FOOTPRINT cells are excluded (their
+  z_min / z_max are window or GT values). GT has one height per cell, so GT uses the pair rule.
+- **Evidence (before):** aeb08ea `out/eval_plan.txt` collisions: terranav mixed seed 3 (clearance
+  0.239 m), baseline_occ flat_obstacles seed 0 (0.232 m) and mixed seed 3 (0.178 m), all with the
+  0.3 m robot radius.
+- **Mechanism:** a box face that falls inside a 0.1 m cell puts ground and top points in the same
+  cell; the cell MEAN sits about halfway, so mean-based pair jumps see roughly half the height (a
+  0.27 m box edge at ~0.12 m, below step_crit) and the edge is only costed, while the lethal zone
+  starts at the unseen top, inside the box: paths pass closer than the robot radius (D15).
+- **Fix check (aeb08ea-dirty, three scenarios only):** clearance terranav mixed s3
+  0.239 → 0.387 m; baseline_occ flat_obstacles s0 0.232 → 0.371 m, mixed s3 0.178 → 0.357 m;
+  no collisions left on these maps. False-lethal on the three maps unchanged (2202 / 1454 / 1802
+  corridor cells), the new step-lethal cells lie on box faces that GT already marks lethal.
+  Noise: on 10,000 synthetic far-range cells (3 points, σ 0.04 m) the span test fires on 8.7%
+  (a sub-critical step cost) and gives a lethal step on 0.13%.
+- **Alternatives:** inflating the lethal mask by an extra safety margin (rejected fallback: costs
+  free space everywhere to cover one mechanism); cross-cell z_max / z_min jumps (rejected in D13:
+  noise extremes grow with range).
+- **After (family level):** TBD from the clean eval_plan run.
+
+## D21. Evaluator slope scale
+- **Decision:** the slope violation is measured on the heightfield smoothed by a Gaussian of
+  σ = `SLOPE_SCALE_M` = 0.1 m (illustrative, the footprint scale; truncated at 3σ); pitch, roll and
+  mean slope use the same field. The raw-gradient maximum is reported as `max_slope_raw_deg`
+  (diagnostic). Samples within the smoothing reach of a height discontinuity are steps (max rise).
+- **Reason:** the raw 0.05 m gradient reads texture a robot's contact patch averages out as slope.
+  Motivating case, aeb08ea: rough seed 9, baseline_occ max slope 38.1° raw (a slope violation);
+  smoothed 21.4° (no violation), raw unchanged at 38.1° in the diagnostic.
+- **Alternatives:** raw gradient (texture → false violations); plane fit under the footprint
+  (closer to the perception features, which D18 keeps the evaluator independent of).
+- **Evidence:** tests/test_evaluate.py: a 20° ramp face reads 20° ± 0.5° smoothed; 0.4 m-wavelength
+  texture reads 31.1° raw, 2.9° smoothed.
+

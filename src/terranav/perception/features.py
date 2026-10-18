@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import ndimage
 
-from terranav.perception.elevation_map import UNKNOWN, ElevationMap
+from terranav.perception.elevation_map import OBSERVED, UNKNOWN, ElevationMap
 from terranav.perception.plane_fit import PLANE_FIT_RADIUS_M, disk_offsets, plane_fit
 
 STEP_SIGMA_GATE = 3.0  # a jump counts only if > 3 sigma of the two cell means combined
@@ -20,6 +20,9 @@ STEP_PAIR_DIST_M = 0.2
 # ILLUSTRATIVE: a significant pair jump of at least this much is an "edge"; roughness is zeroed
 # for every cell whose plane-fit window contains an edge endpoint (see terrain_features).
 ROUGH_EDGE_STEP_M = 0.10
+# ILLUSTRATIVE: an observed cell's own height span (z_max - z_min) is a step when it exceeds
+# K_SPAN * sigma * sqrt(2 ln n): K_SPAN times the expected extreme of n noisy points.
+K_SPAN = 2.0
 
 
 def pair_offsets(grid_res_m: float, max_dist_m: float = STEP_PAIR_DIST_M) -> list[tuple[int, int]]:
@@ -47,7 +50,10 @@ class TerrainFeatures:
     step_m: largest SIGNIFICANT height jump over the cell pairs (<= STEP_PAIR_DIST_M apart) the
         cell is an endpoint of (0 if none); no spreading to other cells, the robot's extent is
         handled only by traversability's dilation.
-    step_raw_m: largest jump over the same pairs without the significance gate.
+    step_raw_m: largest jump over the same pairs without the significance gate (and the ungated
+        in-cell span, see vertical_span).
+    step_span_m: significant in-cell height span of OBSERVED cells (vertical surfaces), 0
+        otherwise; already included in step_m.
     support: known cells in the plane-fit disk.
     """
 
@@ -55,10 +61,12 @@ class TerrainFeatures:
     roughness_m: np.ndarray
     step_m: np.ndarray
     step_raw_m: np.ndarray
+    step_span_m: np.ndarray
     support: np.ndarray
 
     def __post_init__(self) -> None:
-        for name in ("slope_rad", "roughness_m", "step_m", "step_raw_m", "support"):
+        names = ("slope_rad", "roughness_m", "step_m", "step_raw_m", "step_span_m", "support")
+        for name in names:
             arr = np.array(getattr(self, name), dtype=np.float64, copy=True)
             arr.setflags(write=False)
             object.__setattr__(self, name, arr)
@@ -102,6 +110,29 @@ def pair_jumps(
     return best
 
 
+def vertical_span(emap: ElevationMap, k: float = K_SPAN, gated: bool = True) -> np.ndarray:
+    """(ny, nx): z_max - z_min of OBSERVED cells with >= 2 points where that span is significant
+    (gated) or simply present (gated=False); 0 elsewhere.
+
+    Why: a box face, or any vertical surface, can lie inside one cell. Its points then span the
+    full height within that cell while the cell MEAN sits halfway, so mean-based pair jumps see
+    only about half the step (a 0.24 m low-box edge read as ~0.12 m; collisions at aeb08ea).
+    Noise safety: with n points of per-point std sigma = sqrt(noise_var), noise alone gives a
+    span of order sigma * sqrt(2 ln n); requiring span > k * sigma * sqrt(2 ln max(n, 2)) keeps
+    far-range noise from reading as a face. That is what made cross-cell z_max / z_min unusable:
+    those extremes are taken over many more points, at every range, with no per-cell noise
+    scale. FILLED and FOOTPRINT cells are excluded: their z_min / z_max are window or
+    ground-truth values, not point extremes. Ground truth has no per-point spread (one height per
+    cell, exact box assignment), so GT steps come from the pair rule alone.
+    """
+    span = emap.z_max - emap.z_min
+    n = np.maximum(emap.count, 2).astype(float)
+    use = (emap.source == OBSERVED) & (emap.count >= 2)
+    if gated:
+        use &= span > k * np.sqrt(emap.noise_var) * np.sqrt(2.0 * np.log(n))
+    return np.where(use, span, 0.0)
+
+
 def terrain_features(
     emap: ElevationMap, fit_radius_m: float = PLANE_FIT_RADIUS_M
 ) -> TerrainFeatures:
@@ -128,7 +159,8 @@ def terrain_features(
     z = np.where(known, emap.z_mean, np.nan)
     var = np.where(known, emap.z_mean_var, np.nan)
     offsets = pair_offsets(emap.grid.resolution)
-    step = pair_jumps(z, var, offsets)
+    span = vertical_span(emap)
+    step = np.maximum(pair_jumps(z, var, offsets), span)
     disk, _, _ = disk_offsets(math.floor(fit_radius_m / emap.grid.resolution + 1e-9))
     near_edge = ndimage.binary_dilation(step >= ROUGH_EDGE_STEP_M, structure=disk)
     rough = np.where(near_edge, 0.0, rough)
@@ -140,6 +172,9 @@ def terrain_features(
         slope_rad=masked(slope),
         roughness_m=masked(rough),
         step_m=masked(step),
-        step_raw_m=masked(pair_jumps(z, var, offsets, gate=0.0)),
+        step_raw_m=masked(
+            np.maximum(pair_jumps(z, var, offsets, gate=0.0), vertical_span(emap, gated=False))
+        ),
+        step_span_m=masked(span),
         support=fit.support,
     )

@@ -29,6 +29,10 @@ FEATURE_KINDS = ("ramp", "terrace", "rough")
 # Gap: a sustained slope of 40-45 deg is classed as steps but rises < max_step over 0.2 m, so it
 # would not be flagged; the generator's ramps are <= 25 deg.
 DISCONTINUITY_SLOPE_DEG = 40.0
+# ILLUSTRATIVE: violation slopes are measured on the heightfield smoothed by a Gaussian of this
+# std (m), the scale of the robot footprint: a vehicle rests on its contact patch, not on
+# 5 cm texture. The raw-gradient maximum is reported as a diagnostic only.
+SLOPE_SCALE_M = 0.1
 
 
 @dataclass(frozen=True)
@@ -49,9 +53,11 @@ class PathMetrics:
     max_rise_m: largest |z(s2) - z(s1)| over samples <= RISE_WINDOW_M apart (z = bilinear terrain,
         or the box top inside a box footprint), at max_rise_xy (midpoint of that pair).
     max_slope_deg / mean_slope_deg (length-weighted) / max_pitch_deg (along the heading) /
-        max_roll_deg (across it): from the raw heightfield gradient, on continuous samples only
-        (samples next to a discontinuity, see DISCONTINUITY_SLOPE_DEG, are steps, measured by
-        max_rise).
+        max_roll_deg (across it): gradient of the heightfield smoothed at SLOPE_SCALE_M, on
+        continuous samples only (samples within the smoothing reach of a discontinuity, see
+        DISCONTINUITY_SLOPE_DEG, are steps, measured by max_rise). max_slope_deg decides the
+        slope violation. max_slope_raw_deg: the same maximum on the raw (unsmoothed) gradient,
+        diagnostic only.
     rough_exposure_m2: sum over rough patches of (path length inside) * rms; length_in_rough_m.
     length_on_features_m: path length inside each feature kind's footprint.
     violations: subset of ("collision", "rise", "slope"); violation = any.
@@ -64,6 +70,7 @@ class PathMetrics:
     max_rise_m: float
     max_rise_xy: tuple[float, float] | None
     max_slope_deg: float
+    max_slope_raw_deg: float
     mean_slope_deg: float
     max_pitch_deg: float
     max_roll_deg: float
@@ -153,10 +160,13 @@ def surface_z(scenario: Scenario, x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 def discontinuity_mask(
-    hf: np.ndarray, resolution_m: float, slope_deg: float = DISCONTINUITY_SLOPE_DEG
+    hf: np.ndarray,
+    resolution_m: float,
+    slope_deg: float = DISCONTINUITY_SLOPE_DEG,
+    reach_cells: int = 1,
 ) -> np.ndarray:
-    """Terrain cells next to a step: |dh| between 4-neighbours > res * tan(slope_deg). Dilated by
-    one cell, since np.gradient (and the bilinear blend of it) spans +-1 cell."""
+    """Terrain cells within reach_cells of a step: |dh| between 4-neighbours > res * tan(slope_deg).
+    reach_cells = 1 covers np.gradient's +-1 cell stencil; smoothing widens the reach."""
     thresh = resolution_m * math.tan(math.radians(slope_deg))
     jump = np.zeros(hf.shape, dtype=bool)
     for axis in (0, 1):
@@ -166,7 +176,19 @@ def discontinuity_mask(
         lo[axis], hi[axis] = slice(0, -1), slice(1, None)
         jump[tuple(lo)] |= big
         jump[tuple(hi)] |= big
-    return ndimage.binary_dilation(jump, structure=np.ones((3, 3), dtype=bool))
+    size = 2 * reach_cells + 1
+    return ndimage.binary_dilation(jump, structure=np.ones((size, size), dtype=bool))
+
+
+def _slope_field(hf: np.ndarray, grid, x, y, smooth_cells: float) -> np.ndarray:
+    """(M, 2) world gradient (dz/dx, dz/dy) at the samples, of hf smoothed by smooth_cells."""
+    # truncate at 3 sigma: matches the discontinuity reach used for the smoothed field
+    if smooth_cells > 0:
+        field_ = ndimage.gaussian_filter(hf, smooth_cells, mode="nearest", truncate=3.0)
+    else:
+        field_ = hf
+    gy, gx = np.gradient(field_, grid.resolution)  # d/drow = d/dy, d/dcol = d/dx
+    return np.stack([bilinear_sample(gx, grid, x, y), bilinear_sample(gy, grid, x, y)], axis=1)
 
 
 def evaluate_path(scenario: Scenario, path_xy: np.ndarray, limits: PhysicalLimits) -> PathMetrics:
@@ -200,11 +222,22 @@ def evaluate_path(scenario: Scenario, path_xy: np.ndarray, limits: PhysicalLimit
             rise = float(dz[i])
             rise_xy = (float((x[i] + x[i + k]) / 2), float((y[i] + y[i + k]) / 2))
 
-    gy, gx = np.gradient(hf, grid.resolution)  # d/drow = d/dy, d/dcol = d/dx
-    g = np.stack([bilinear_sample(gx, grid, x, y), bilinear_sample(gy, grid, x, y)], axis=1)
-    steps_mask = discontinuity_mask(hf, grid.resolution).astype(float)
-    cont = bilinear_sample(steps_mask, grid, x, y) == 0
+    sigma_cells = SLOPE_SCALE_M / grid.resolution
+    # smoothed field: steps spread over ~3 sigma, so they are excluded that far out
+    reach = 1 + math.ceil(3 * sigma_cells)
+    g = _slope_field(hf, grid, x, y, sigma_cells)
+    cont = (
+        bilinear_sample(
+            discontinuity_mask(hf, grid.resolution, reach_cells=reach).astype(float), grid, x, y
+        )
+        == 0
+    )
+    g_raw = _slope_field(hf, grid, x, y, 0.0)
+    cont_raw = (
+        bilinear_sample(discontinuity_mask(hf, grid.resolution).astype(float), grid, x, y) == 0
+    )
     slope = np.degrees(np.arctan(np.hypot(g[:, 0], g[:, 1])))
+    slope_raw = np.degrees(np.arctan(np.hypot(g_raw[:, 0], g_raw[:, 1])))
     pitch = np.degrees(np.arctan(np.abs(np.sum(g * head, axis=1))))
     normal = np.stack([-head[:, 1], head[:, 0]], axis=1)
     roll = np.degrees(np.arctan(np.abs(np.sum(g * normal, axis=1))))
@@ -245,6 +278,7 @@ def evaluate_path(scenario: Scenario, path_xy: np.ndarray, limits: PhysicalLimit
         max_rise_m=rise,
         max_rise_xy=rise_xy,
         max_slope_deg=max_slope,
+        max_slope_raw_deg=float(np.max(slope_raw[cont_raw])) if cont_raw.any() else 0.0,
         mean_slope_deg=mean_slope,
         max_pitch_deg=cmax(pitch),
         max_roll_deg=cmax(roll),

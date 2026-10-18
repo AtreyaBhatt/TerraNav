@@ -37,6 +37,7 @@ def feats(slope_rad=0.0, rough_m=0.0, step_m=0.0, step_raw_m=None) -> TerrainFea
         roughness_m=full(rough_m),
         step_m=full(step_m),
         step_raw_m=full(step_m if step_raw_m is None else step_raw_m),
+        step_span_m=full(0.0),
         support=full(29),
     )
 

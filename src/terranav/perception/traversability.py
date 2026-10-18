@@ -92,6 +92,8 @@ def traversability(
             gate=STEP_SIGMA_GATE if cfg.step_gate_for_lethal else 0.0,
             ucb_k=cfg.lethal_ucb_k,
         )
+        # the significant in-cell span (vertical surfaces) has no pair sigma; keep it as is
+        bound = np.maximum(bound, features.step_span_m)
         step_lethal = np.where(np.isnan(step_lethal), np.nan, bound)
     reason = np.zeros(slope.shape, dtype=np.uint8)
     unknown = emap.source == UNKNOWN

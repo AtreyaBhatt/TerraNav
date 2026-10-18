@@ -217,3 +217,47 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   box covers the cell centre) also differs from perception's cell average.
 - **Impact:** to be measured by the M3 path evaluator as the GT collision rate of planned paths
   (whether a planner actually routes through these cells), not just as a cell rate.
+
+## D16. Planner design
+- **Decision:** grid A* on the 0.1 m traversability map (`planning/astar.py`): 8-connected, no
+  corner cutting (a diagonal is refused if either orthogonal cell it passes is lethal); edge cost
+  step_len · (1 + α · (c_u + c_v) / 2) with c ∈ [0, 1) the traversability cost and α ≥ 0
+  (`DEFAULT_ALPHA` = 4.0, illustrative, swept in M4); octile heuristic in metres (admissible and
+  consistent: every edge costs at least its length); deterministic ties (f, then h, then
+  insertion order). Then cost-preserving shortcutting (`planning/smooth.py`): a sub-path is
+  replaced by a straight segment only if the segment touches no lethal cell (supercover, corners
+  included) and its line-integral cost under the same model is ≤ the sub-path's.
+- **Alternatives:** 4-connected grid (longer, blockier paths); Theta*/any-angle search; plain
+  line-of-sight smoothing; costs as hard thresholds only.
+- **Reason:** the edge model trades metres against terrain cost with one interpretable knob;
+  line-of-sight smoothing would cut straight back through costly-but-passable terrain that A*
+  had deliberately avoided; the cost-preserving rule cannot do that, and never increases cost.
+- **Evidence:** tests/test_astar.py (exact hand-derived costs; equals scipy Dijkstra on random
+  12×12 grids within 1e-9) and tests/test_smooth.py (never crosses lethal cells, never increases
+  cost, collapses a free path to one segment, keeps a detour around a costly band). Runtime on
+  the four rendered scenarios (`scripts/render_plans.py`, A* + smoothing, single process):
+  4.6–12.7 ms per plan, 340–2063 expansions.
+
+## D17. Planner comparison design
+- **Decision:** three planners differing only in their input (`planning/planners.py`):
+  TerraNav = perceived traversability, graded (cost-weighted); Baseline-Occ = perceived
+  traversability, ungraded (non-lethal cells cost 0: shortest collision-free path on the same
+  lethal mask); Oracle = ground-truth traversability, graded. Same A*, smoothing and α.
+- **What each pair isolates:** TerraNav vs Baseline-Occ: the value of graded costs given the same
+  perception (same lethal mask). TerraNav vs Oracle: the cost of imperfect perception (noise,
+  occlusion, unknown = blocked) with the same planner. Baseline-Occ vs Oracle: both effects
+  together.
+- **Reason:** changing one factor per pair makes differences attributable.
+- **Evidence:** TBD (M3-B evaluator).
+
+## D18. Evaluation must be independent of the traversability definitions
+- **Decision:** the M3-B path evaluator will judge paths against the simulated world directly
+  (heightfield and boxes along the swept robot footprint: true heights, slopes, step heights,
+  box contact), not against GT traversability computed by the same feature/lethal functions the
+  planners use.
+- **Alternatives:** score paths by GT traversability (cost, lethal mask) only.
+- **Reason:** a metric built from the same definitions cannot detect a flaw in them. Motivating
+  case at b286a6b: edge-aware roughness (D14) zeroes 19% of textured GT cells in the rough
+  family, including both formerly rough-lethal cells; because GT traversability uses the same
+  function, the core false-free metric showed nothing.
+- **Evidence:** D14 limitation measurement; evaluator TBD in M3-B.

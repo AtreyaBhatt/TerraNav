@@ -140,3 +140,56 @@ def test_ground_truth_traversability_box():
     far &= (X > 0.5) & (X < 11.5) & (Y > 0.5) & (Y < 11.5)
     assert not t.lethal[far].any()
     np.testing.assert_allclose(t.cost[far], 0.0, atol=1e-9)
+
+
+def ucb_step_map(height: float, sigma: float):
+    """Flat ground with a step of `height` at x = 6 m (cols 59 | 60); every cell mean has
+    standard deviation sigma / sqrt(2), so each pair jump has sigma_jump = sigma."""
+    z = np.where(X >= 6.0, height, 0.0)
+    emap = emap_from(z, z_mean_var=sigma**2 / 2)
+    return emap, terrain_features(emap)
+
+
+@pytest.mark.parametrize(
+    ("height", "k", "lethal"),
+    [
+        (0.195, 0.0, False),  # point value 0.195 < 0.20
+        (0.195, 2.0, True),  # 0.195 + 2 * 0.005 = 0.205 >= 0.20
+        (0.150, 2.0, False),  # 0.150 + 0.010 = 0.160 < 0.20
+    ],
+)
+def test_lethal_ucb_on_step(height, k, lethal):
+    # sigma_jump = 0.005 m: the jump is far above the 3-sigma gate (0.015 m) in every case.
+    emap, f = ucb_step_map(height, 0.005)
+    t = traversability(emap, f, replace(CFG, lethal_ucb_k=k))
+    rows = slice(3, -3)
+    assert bool(np.all(t.core_reason[rows, 58:62] & R_STEP)) is lethal
+    assert not (t.core_reason[rows, :58] & R_STEP).any()
+
+
+def test_lethal_ucb_k0_unchanged():
+    # k = 0 reproduces the default exactly (lethal mask, reasons and cost).
+    emap, f = ucb_step_map(0.195, 0.005)
+    a = traversability(emap, f, CFG)
+    b = traversability(emap, f, replace(CFG, lethal_ucb_k=0.0))
+    np.testing.assert_array_equal(a.lethal, b.lethal)
+    np.testing.assert_array_equal(a.core_reason, b.core_reason)
+    np.testing.assert_array_equal(a.cost, b.cost)
+
+
+def test_ground_truth_terrace_edge_has_no_rough_band():
+    # One-step 0.15 m mesa (4 x 4 m, yaw 0) on flat ground: GT step 0.15 m along its outline
+    # (sub-critical), and with edge-aware roughness no rough-lethal (>= 0.05 m) cell around it.
+    from terranav.sim.ground_truth import ground_truth_features
+    from terranav.sim.world import add_terrace
+
+    hf = add_terrace(
+        np.zeros((TERRAIN.ny, TERRAIN.nx)), TERRAIN, (6.0, 6.0), (4.0, 4.0), 0.0, 0.15, 1, 2.0, 1
+    )
+    sc = Scenario(World(hf, TERRAIN, (), "test", 0), (1.0, 6.0), (11.0, 6.0), "test", 0, {})
+    f = ground_truth_features(sc, MAP)
+    inner = (slice(5, -5), slice(5, -5))
+    assert np.nanmax(f.step_m[inner]) == pytest.approx(0.15, abs=1e-9)
+    assert np.nanmax(f.roughness_m[inner]) < CFG.rough_crit_m
+    t = ground_truth_traversability(sc, MAP, CFG)
+    assert not t.lethal[inner].any()

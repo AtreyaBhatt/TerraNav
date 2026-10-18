@@ -114,7 +114,12 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Evidence:** eval_trav at 3b8996a-dirty (with band): flat_obstacles perceived start-goal
   connectivity 0.90 vs GT 1.00. The one closure, flat_obstacles seed 3 at 3ceb792, reopens if
   either the unknown cells or the banded step cells are removed (`scripts/diag_trav.py`); without
-  the band it connects. Final numbers: TBD from the clean run.
+  the band it connects. Clean run at 6c4fd3f (`out/eval_trav.txt`, seeds 0–9) (flat_obstacles / slopes / rough / steps / mixed):
+  perceived start-goal connectivity 1.00 / 1.00 / 1.00 / 1.00 / 1.00 (GT 1.00 in all); core FF
+  0.002 / n/a (0) / 0.000 / 0.173 / 0.006; band FF 0.030 / n/a (0) / 0.028 / 0.425 / 0.076;
+  FL 0.317 / 0.294 / 0.264 / 0.285 / 0.292, of which unknown 0.221 / 0.196 / 0.171 / 0.185 / 0.195
+  and dilation only 0.096 / 0.098 / 0.092 / 0.100 / 0.097. Features + traversability latency
+  (`out/eval_trav_latency.txt`, serial): median 6.0 / 5.8 / 5.8 / 5.8 / 5.8 ms.
 
 ## D11. Noise-aware features
 - **Decision:** roughness = sqrt(max(0, residual² − fit_noise_var)), where residual is the
@@ -126,7 +131,9 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   look rough or stepped. On a clean slope pair jumps stay ≤ tan(slope)·0.2 m (0.115 m at 30°).
   The r_step band once attached to the step feature is gone (D10).
 - **Evidence:** tests/test_features.py (iid noise: roughness ≈ σ without, ≈ 0 with the
-  subtraction; bounded noise passes no steps). Pipeline numbers: TBD from the clean eval run.
+  subtraction; bounded noise passes no steps). Clean run at 6c4fd3f (`out/eval_trav.txt`)
+  (flat_obstacles / slopes / rough / steps / mixed): roughness MAE 0.0150 / 0.0008 / 0.0010 / 0.0020 / 0.0054 m; step MAE 0.0334 / 0.0015 /
+  0.0024 / 0.0040 / 0.0119 m; slope MAE 2.35 / 0.24 / 0.33 / 0.59 / 1.07 deg.
 
 ## D12. Fill guard: span AND plane residual
 - **Decision:** `fill_gaps` fills a gap cell only if (span) the observed heights in its window
@@ -143,7 +150,10 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   (flat_obstacles seed 0): 27 of 28 box-top cells next to core false-free cells were FILLED,
   0.237 m low (median), under v2. Core false-free cells, flat_obstacles + steps, seeds 0–9: see
   D13 table. tests/test_hole_fill.py: 0.2-slope stripes fill, 25° stripes, a 0.3 m step, a box
-  rim and a low box top do not. Final numbers: TBD from the clean run.
+  rim and a low box top do not. Clean run at 6c4fd3f with the AND guard (`out/eval_map.txt`)
+  (flat_obstacles / slopes / rough / steps / mixed): filled-cell |z_mean − GT| p95 0.0027 / 0.0119 / 0.0179 / 0.0515 / 0.0095 m; corridor
+  coverage raw → fill 0.718 → 0.734, 0.787 → 0.804, 0.806 → 0.829, 0.798 → 0.817, 0.778 → 0.795;
+  start-goal known-connectivity 1.00 in all families.
 
 ## D13. Step lethality: significance gate kept; pairs up to 0.2 m
 - **Decision:** a step is lethal when a jump ≥ 0.20 m is also 3-sigma significant
@@ -160,4 +170,50 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   3ceb792-dirty; core false-free cells = GT lethal before dilation, perceived non-lethal):**
   flat_obstacles 86 (30 GT-step) adjacent pairs + v2 guard → 45 (30) with 0.2 m pairs → 28 (15)
   with the AND guard; steps 81 → 81 → 64 (all GT-rough). Gate on/off identical in all three runs.
-  Final numbers: TBD from the clean run.
+  Clean run at 6c4fd3f (`out/eval_trav.txt`) (flat_obstacles / slopes / rough / steps / mixed): GT core cells 11546 / 0 / 2 / 370 / 3495,
+  core FF 0.002 / n/a (0) / 0.000 / 0.173 / 0.006. The steps family's 0.173 is examined in D14.
+
+## D14. Edge-aware roughness; UCB step lethality not adopted
+- **Decision:** roughness is set to 0 for every cell whose plane-fit window (0.3 m) contains an
+  endpoint of a significant pair jump ≥ `ROUGH_EDGE_STEP_M` = 0.10 m (illustrative); edges are
+  the step feature's job, roughness measures texture. Perception and GT use the same function.
+  `TraversabilityConfig.lethal_ucb_k` stays at its default 0 (point-value step lethality).
+- **Alternatives:** robust (outlier-rejecting) plane fit, so an edge does not inflate the
+  residual: rejected for now, as it needs iterative per-cell fitting instead of the vectorised
+  moment sums, and still mixes both levels where the edge passes near the cell centre.
+  UCB lethality k = 1 or 2.
+- **Reason:** a plane fitted across a sub-critical edge (e.g. a 0.15 m terrace step) reports
+  the edge as roughness, creating a band of borderline "rough" cells one fit radius wide. At
+  6c4fd3f all 64 core false-free cells of the steps family were such roughness-only cells, with
+  GT within 1 cm of rough_crit.
+- **Evidence (exploratory, `scripts/diag_trav.py`, 6c4fd3f-dirty, all families, seeds 0–9).**
+  Core false-free cells / GT core cells, k = 0, before (`out/diag_trav_before_edge_rough.txt`)
+  → after (`out/diag_trav.txt`): flat_obstacles 28 / 11546 → 15 / 8610; slopes 0 / 0 → 0 / 0;
+  rough 0 / 2 → 0 / 0; steps 64 / 370 (0.173) → 0 / 1 (0.000); mixed 20 / 3495 → 4 / 2431.
+  False-lethal rate before → after: 0.317 → 0.326, 0.294 → 0.294, 0.264 → 0.264, 0.285 → 0.291,
+  0.292 → 0.297 (more GT-free cells near edges that perception still marks lethal, mostly via
+  dilation: 0.096 → 0.107 in flat_obstacles). Remaining core false-free cells: 15 low-box step
+  cells (D15), 2 slope cells < 1° over 30° (flat_obstacles), 4 step cells < 1 cm over 0.20 m
+  (mixed). No route closures.
+- **UCB decision:** after the edge-aware change, k = 1 and k = 2 each remove 1 core false-free
+  cell (flat_obstacles 15 → 14; steps 0 and mixed 4 unchanged), while steps FL rises 0.291 →
+  0.295 (k = 1) → 0.297 (k = 2), FL by feature 0.000 → 0.001 → 0.002. Not a material reduction,
+  so the default stays k = 0. (Before the edge-aware change k = 2 removed 32 of 64 steps cells,
+  but only indirectly, through dilation of extra step-lethal cells over borderline rough cells.)
+- **Limitation (measured):** texture whose own height jumps reach 0.10 m masks itself. In the
+  rough family (GT, seeds 0–9), 1340 of 7122 cells with raw roughness ≥ 1 cm are zeroed
+  (median 0.025 m, max 0.055 m), including the 2 cells that were rough-lethal. Because GT uses the
+  same function, the core false-free metric cannot show this loss. Texture within ~0.3 m of a
+  ≥ 0.10 m edge is ignored as well; the generator does not overlap features.
+
+## D15. Known residual: low-box faces perceived at about half height
+- **Observation:** at the edge of a box only slightly taller than step_crit (0.22–0.27 m), cells
+  partly covered by the box average ground and top points, so the perceived jump is about half
+  the true one (perceived step median 11.42 cm on 15 core false-free cells whose GT step is 2–5 cm
+  over the 20 cm limit). flat_obstacles at 6c4fd3f: 15 of 11,546 GT core cells (0.002) before
+  the edge-aware roughness change; 15 of 8610 after.
+- **Not fixed here:** the 0.2 m step pairs (D13) recover full jumps only where the edge falls
+  inside one cell; z_max/z_min would track noise extremes (D13). The GT convention (box top if the
+  box covers the cell centre) also differs from perception's cell average.
+- **Impact:** to be measured by the M3 path evaluator as the GT collision rate of planned paths
+  (whether a planner actually routes through these cells), not just as a cell rate.

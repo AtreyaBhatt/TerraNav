@@ -44,23 +44,28 @@ def pct(a, q: float) -> float:
     return float(np.percentile(a, q)) if len(a) else float("nan")
 
 
-def header(title: str, rev: str, extra: list[str]) -> list[str]:
+def header(title: str, rev: str, started: str, wall_s: float, extra: list[str]) -> list[str]:
     return [
         f"# TerraNav {title} (measured)",
         f"# git: {rev}",
-        f"# date: {dt.datetime.now().isoformat(timespec='seconds')}",
+        f"# started: {started}",
+        f"# wall time: {wall_s:.1f} s",
         f"# survey {STRATEGY} (k = {DEFAULT_SCAN_K[STRATEGY]}), default SensorConfig, 0.1 m map grid",
         *extra,
         "",
     ]
 
 
-def accuracy_table(results: list[dict], seeds: int, workers: int, wall_s: float, rev: str) -> str:
+def accuracy_table(
+    results: list[dict], seeds: int, workers: int, wall_s: float, rev: str, started: str
+) -> str:
     lines = header(
         "elevation map evaluation",
         rev,
+        started,
+        wall_s,
         [
-            f"# seeds 0..{seeds - 1}; {len(results)} jobs, {workers} worker(s), wall {wall_s:.1f} s",
+            f"# seeds 0..{seeds - 1}; {len(results)} jobs, {workers} worker(s)",
             "# coverage: mean over scenarios; raw = observed, fill = observed + filled + footprint",
             "# errors |z_mean - GT| in metres, pooled over all cells of the family's scenarios",
             f"# goal vis: share with >= {GOAL_VISIBLE_FRACTION:.0%} of goal-disk cells known",
@@ -88,19 +93,16 @@ def accuracy_table(results: list[dict], seeds: int, workers: int, wall_s: float,
     return "\n".join(lines) + "\n"
 
 
-def run_latency(rev: str) -> str:
-    lines = header(
-        "perception latency",
-        rev,
-        [
-            f"# fuse + fill_gaps + mark_footprint; serial (1 process), seeds 0..{LATENCY_SEEDS - 1}",
-            (
-                f"# per scenario: median of {LATENCY_REPEATS} repeats; "
-                f"machine: {platform.machine()}, {os.cpu_count()} logical CPUs"
-            ),
-        ],
-    )
-    lines.append(f"{'family':<15} {'median':>9} {'p95':>9}")
+def run_latency(rev: str, started: str, t0: float) -> str:
+    title = "perception latency"
+    extra = [
+        f"# fuse + fill_gaps + mark_footprint; serial (1 process), seeds 0..{LATENCY_SEEDS - 1}",
+        (
+            f"# per scenario: median of {LATENCY_REPEATS} repeats; "
+            f"machine: {platform.machine()}, {os.cpu_count()} logical CPUs"
+        ),
+    ]
+    lines = [f"{'family':<15} {'median':>9} {'p95':>9}"]
     for family in FAMILIES:
         t = [
             perception_latency_s((family, s, STRATEGY), LATENCY_REPEATS)
@@ -108,7 +110,8 @@ def run_latency(rev: str) -> str:
         ]
         lines.append(f"{family:<15} {pct(t, 50) * 1e3:>7.1f}ms {pct(t, 95) * 1e3:>7.1f}ms")
         print(f"  {family} done", flush=True)
-    return "\n".join(lines) + "\n"
+    head = header(title, rev, started, time.perf_counter() - t0, extra)
+    return "\n".join(head + lines) + "\n"
 
 
 def main() -> None:
@@ -120,12 +123,13 @@ def main() -> None:
         "--allow-dirty", action="store_true", help="run on an uncommitted tree (hash gets -dirty)"
     )
     args = parser.parse_args()
+    started = dt.datetime.now().isoformat(timespec="seconds")
+    t0 = time.perf_counter()
 
     rev = revision_label(args.allow_dirty)
 
-    t0 = time.perf_counter()
     if args.latency:
-        text, out = run_latency(rev), OUT_LATENCY
+        text, out = run_latency(rev, started, t0), OUT_LATENCY
     else:
         jobs = [(f, s, STRATEGY) for f in FAMILIES for s in range(args.seeds)]
         print(f"{len(jobs)} jobs on {args.workers} worker(s)")
@@ -135,7 +139,10 @@ def main() -> None:
 
         results = run_parallel(evaluate_map_job, jobs, args.workers, progress)
         wall_s = time.perf_counter() - t0
-        text, out = accuracy_table(results, args.seeds, args.workers, wall_s, rev), OUT
+        text, out = (
+            accuracy_table(results, args.seeds, args.workers, wall_s, rev, started),
+            OUT,
+        )
     sys.stdout.write(text)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text)

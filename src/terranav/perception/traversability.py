@@ -9,7 +9,7 @@ import numpy as np
 from scipy import ndimage
 
 from terranav.perception.elevation_map import UNKNOWN, ElevationMap
-from terranav.perception.features import TerrainFeatures
+from terranav.perception.features import STEP_SIGMA_GATE, TerrainFeatures, pair_jumps, pair_offsets
 from terranav.perception.plane_fit import disk_offsets
 from terranav.types import GridSpec
 
@@ -34,8 +34,11 @@ class TraversabilityConfig:
     w_step: float = 0.3
     robot_radius_m: float = 0.3  # lethal cells are grown by this disk (robot footprint)
     # True: a step is lethal only if the jump is >= step_crit AND 3-sigma significant.
-    # False: any raw adjacent jump >= step_crit is lethal. The cost term always uses the gated step.
+    # False: any raw jump >= step_crit is lethal. The cost term always uses the gated step.
     step_gate_for_lethal: bool = True
+    # k > 0: a step is lethal when jump + k * sigma_jump >= step_crit, with sigma_jump =
+    # sqrt(z_mean_var_i + z_mean_var_j) (the same sigma as the significance gate). 0 = point value.
+    lethal_ucb_k: float = 0.0
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -71,7 +74,8 @@ def traversability(
 
     core lethal = unknown | any feature NaN (insufficient support) | slope >= slope_crit |
                   roughness >= rough_crit | step >= step_crit, where step is the 3-sigma gated
-                  step_m (step_gate_for_lethal) or the raw step_raw_m;
+                  step_m (step_gate_for_lethal) or the raw step_raw_m; with lethal_ucb_k = k > 0
+                  the per-pair bound jump + k * sigma_jump replaces the jump (pair_jumps);
     lethal      = core lethal dilated by a robot_radius_m disk (dilate_lethal);
     cost        = w_slope*slope/slope_crit + w_rough*rough/rough_crit + w_step*step_m/step_crit
                   (gated step), clipped to [0, 1); NaN where lethal.
@@ -79,6 +83,16 @@ def traversability(
     slope_crit = math.radians(cfg.slope_crit_deg)
     slope, rough, step = features.slope_rad, features.roughness_m, features.step_m
     step_lethal = step if cfg.step_gate_for_lethal else features.step_raw_m
+    if cfg.lethal_ucb_k > 0:
+        known = emap.source != UNKNOWN
+        bound = pair_jumps(
+            np.where(known, emap.z_mean, np.nan),
+            np.where(known, emap.z_mean_var, np.nan),
+            pair_offsets(emap.grid.resolution),
+            gate=STEP_SIGMA_GATE if cfg.step_gate_for_lethal else 0.0,
+            ucb_k=cfg.lethal_ucb_k,
+        )
+        step_lethal = np.where(np.isnan(step_lethal), np.nan, bound)
     reason = np.zeros(slope.shape, dtype=np.uint8)
     unknown = emap.source == UNKNOWN
     reason[unknown] |= R_UNKNOWN

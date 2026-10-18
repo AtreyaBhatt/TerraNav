@@ -12,6 +12,7 @@ test-all:
 # Evaluations, strictly one after another (each uses all cores). Refuses a dirty tree.
 eval:
 	uv run python scripts/eval_map.py
+	uv run python scripts/eval_map.py --latency
 	uv run python scripts/eval_trav.py
 	uv run python scripts/eval_trav.py --latency
 

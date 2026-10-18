@@ -33,16 +33,19 @@ from terranav.sim.scenario import DEFAULT_SCAN_K, FAMILIES, SCAN_STRATEGIES
 OUT = Path("out/eval_scan.txt")
 
 
-def table(results: list[dict], seeds: int, workers: int, wall_s: float, rev: str) -> str:
+def table(
+    results: list[dict], seeds: int, workers: int, wall_s: float, rev: str, started: str
+) -> str:
     lines = [
         "# TerraNav scan coverage evaluation (measured)",
         f"# git: {rev}",
-        f"# date: {dt.datetime.now().isoformat(timespec='seconds')}",
+        f"# started: {started}",
+        f"# wall time: {wall_s:.1f} s",
         (
             f"# seeds 0..{seeds - 1}, poses per strategy {DEFAULT_SCAN_K}, default SensorConfig, "
             "0.1 m map grid"
         ),
-        f"# {len(results)} jobs, {workers} worker(s), wall time {wall_s:.1f} s",
+        f"# {len(results)} jobs, {workers} worker(s)",
         "# coverage = fraction of region cells with >= 1 backprojected point",
         "",
         f"{'family':<15} {'region':<10}"
@@ -78,6 +81,8 @@ def main() -> None:
         "--allow-dirty", action="store_true", help="run on an uncommitted tree (hash gets -dirty)"
     )
     args = parser.parse_args()
+    started = dt.datetime.now().isoformat(timespec="seconds")
+    t0 = time.perf_counter()
     rev = revision_label(args.allow_dirty)
 
     jobs = [(f, s, st) for f in FAMILIES for s in range(args.seeds) for st in SCAN_STRATEGIES]
@@ -86,11 +91,10 @@ def main() -> None:
     def progress(done: int, total: int) -> None:
         print(f"\r  {done}/{total} jobs done", end="" if done < total else "\n", flush=True)
 
-    t0 = time.perf_counter()
     results = run_jobs(jobs, args.workers, progress=progress)
     wall_s = time.perf_counter() - t0
 
-    text = table(results, args.seeds, args.workers, wall_s, rev)
+    text = table(results, args.seeds, args.workers, wall_s, rev, started)
     print(text, end="")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(text)

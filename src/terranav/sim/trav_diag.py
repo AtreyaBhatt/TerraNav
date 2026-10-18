@@ -1,14 +1,16 @@
 """Diagnosis of traversability errors (evaluation only).
 
 core false-free cell: GT lethal before dilation, perceived non-lethal (the robot would believe
-an actual hazard cell is passable). For each, in the corridor, record what perception saw.
-Route blockers: when perceived start-goal is disconnected but GT is connected, find which
-perceived core-lethal category, if removed, reconnects the route.
+an actual hazard cell is passable). For each, in the corridor, record what perception saw and
+the GT feature values (margins above the critical values). Route blockers: when perceived
+start-goal is disconnected but GT is connected, find which perceived core-lethal category, if
+removed, reconnects the route. Several TraversabilityConfig variants are evaluated on the same
+perception run.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Sequence
 from itertools import combinations
 
 import numpy as np
@@ -25,10 +27,10 @@ from terranav.perception.traversability import (
 )
 from terranav.sim.coverage import corridor_mask
 from terranav.sim.scan_eval import Job
-from terranav.sim.trav_eval import ground_truth, perceive, traversable_connected
+from terranav.sim.trav_eval import compare, ground_truth, perceive, traversable_connected
 from terranav.types import SensorConfig
 
-GATE_SETTINGS = (True, False)  # step_gate_for_lethal
+Variants = Sequence[tuple[str, TraversabilityConfig]]
 BLOCKER_BITS = {
     "unknown": R_UNKNOWN,
     "no_estimate": R_NO_ESTIMATE,
@@ -54,14 +56,14 @@ def route_blockers(reason: np.ndarray, grid, start_xy, goal_xy, robot_radius_m: 
     return ["none of <= 2 categories"]
 
 
-def diagnose_job(job: Job, sensor: SensorConfig | None = None) -> dict:
-    """Per gate setting (key "gate_True" / "gate_False"): core false-free cell records,
-    connectivity and route blockers."""
+def diagnose_job(job: Job, variants: Variants, sensor: SensorConfig | None = None) -> dict:
+    """Per variant name: corridor counts (trav_eval.compare), core false-free cell records
+    (perceived source, GT reasons, perceived and GT feature values, distance to the nearest
+    camera), connectivity and route blockers."""
     cfg = SimConfig()
     sensor = sensor if sensor is not None else cfg.sensor
     grid = cfg.map_grid
-    base = TraversabilityConfig()
-    tcfgs = tuple(replace(base, step_gate_for_lethal=g) for g in GATE_SETTINGS)
+    tcfgs = tuple(t for _, t in variants)
     sc, frames, emap, feats, travs = perceive(job, sensor, tcfgs)
     corr = corridor_mask(sc, grid)
     x, y = grid.cell_centers_xy()
@@ -69,8 +71,8 @@ def diagnose_job(job: Job, sensor: SensorConfig | None = None) -> dict:
     dist_cam = np.min(np.hypot(x[..., None] - cams[:, 0], y[..., None] - cams[:, 1]), axis=-1)
 
     out = {"family": job[0], "seed": job[1]}
-    for gate, tcfg, trav in zip(GATE_SETTINGS, tcfgs, travs, strict=True):
-        _, gt = ground_truth(sc, grid, tcfg)
+    for (name, tcfg), trav in zip(variants, travs, strict=True):
+        gt_feats, gt = ground_truth(sc, grid, tcfg)
         ff = corr & (gt.core_reason != 0) & ~trav.lethal
         conn = traversable_connected(trav.lethal, grid, sc.start_xy, sc.goal_xy)
         conn_gt = traversable_connected(gt.lethal, grid, sc.start_xy, sc.goal_xy)
@@ -79,14 +81,15 @@ def diagnose_job(job: Job, sensor: SensorConfig | None = None) -> dict:
             blockers = route_blockers(
                 trav.core_reason, grid, sc.start_xy, sc.goal_xy, tcfg.robot_radius_m
             )
-        out[f"gate_{gate}"] = {
-            "source": emap.source[ff],
-            "gt_reason": gt.core_reason[ff],
-            "slope_rad": feats.slope_rad[ff],
-            "roughness_m": feats.roughness_m[ff],
-            "step_m": feats.step_m[ff],
-            "step_raw_m": feats.step_raw_m[ff],
-            "dist_cam_m": dist_cam[ff],
+        records = {"source": emap.source[ff], "gt_reason": gt.core_reason[ff]}
+        for feat in ("slope_rad", "roughness_m", "step_m", "step_raw_m"):
+            records[feat] = getattr(feats, feat)[ff]
+        for feat in ("slope_rad", "roughness_m", "step_m"):
+            records[f"gt_{feat}"] = getattr(gt_feats, feat)[ff]
+        records["dist_cam_m"] = dist_cam[ff]
+        out[name] = {
+            "counts": compare(sc, grid, feats, trav, gt_feats, gt),
+            "records": records,
             "connected": conn,
             "connected_gt": conn_gt,
             "blockers": blockers,

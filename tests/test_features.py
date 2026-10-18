@@ -108,3 +108,33 @@ def test_unknown_and_unsupported_cells_are_nan():
     isolated[60, 60:63] = True  # 3 known cells: support < 8
     f = terrain_features(emap_from(np.zeros(X.shape), known=isolated))
     assert np.all(np.isnan(f.slope_rad))
+
+
+def test_sub_critical_edge_is_a_step_not_roughness():
+    # 0.15 m step at x = 6 m (cols 59 | 60): pairs up to 2 cells apart give step 0.15 m on
+    # cols 58..61 (>= ROUGH_EDGE_STEP_M = 0.10, < step_crit 0.20). Plane fits within 3 cells of
+    # those endpoints (cols 55..64) straddle the edge; their roughness is zeroed. Nothing is
+    # lethal: step 0.15 < 0.20, roughness 0 instead of the edge's residual.
+    z = np.where(X >= 6.0, 0.15, 0.0)
+    emap = emap_from(z)
+    f = terrain_features(emap)
+    rows = slice(3, -3)
+    np.testing.assert_allclose(f.step_m[rows, 58:62], 0.15, atol=1e-12)
+    assert np.all(f.roughness_m[rows, 55:65] == 0.0)
+    t = traversability(emap, f, TraversabilityConfig())
+    assert not t.core_reason[rows, 3:-3].any()
+
+
+def test_roughness_away_from_edges_unchanged():
+    # iid noise (sigma 0.02) on x < 4 m, and a 0.15 m edge at x = 8 m. Cells farther than
+    # 0.3 m (fit radius) + 0.2 m (pair reach) from the edge keep exactly the roughness they
+    # have without the edge.
+    rng = np.random.default_rng(4)
+    noise = np.where(X < 4.0, rng.normal(0.0, 0.02, X.shape), 0.0)
+    with_edge = terrain_features(emap_from(noise + np.where(X >= 8.0, 0.15, 0.0)))
+    without = terrain_features(emap_from(noise))
+    far = (slice(3, -3), slice(3, 70))  # x < 7.0 m: >= 0.5 m from the edge
+    # Equal up to float rounding: plane fits centre heights on the map's weighted mean, which
+    # the edge shifts (differences ~1e-17).
+    np.testing.assert_allclose(with_edge.roughness_m[far], without.roughness_m[far], atol=1e-12)
+    assert np.median(with_edge.roughness_m[3:-3, 3:37]) > 0.015  # texture still measured

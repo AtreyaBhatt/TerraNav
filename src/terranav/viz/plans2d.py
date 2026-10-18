@@ -27,7 +27,18 @@ def path_length_m(p: PlanResult, grid: GridSpec) -> float:
     return grid.resolution * sum(math.hypot(*(b - a)) for a, b in pairwise(p.path_rc))
 
 
-def render_plans(run: PipelineRun, grid: GridSpec, out_path: str | Path, title: str = "") -> Path:
+def render_plans(
+    run: PipelineRun,
+    grid: GridSpec,
+    out_path: str | Path,
+    title: str = "",
+    violations: dict[str, list[tuple[tuple[float, float], str]]] | None = None,
+) -> Path:
+    """Left: perceived cost + TerraNav / Baseline-Occ; right: GT cost + all three planners.
+
+    violations: per planner, ((x, y), label) points drawn as red crosses on the GT panel
+    (e.g. collision point, max-rise point from terranav.sim.evaluate).
+    """
     x0, y0 = grid.origin
     extent = [x0, x0 + grid.size_x, y0, y0 + grid.size_y]
     cmap = plt.get_cmap("YlOrRd").copy()
@@ -54,6 +65,22 @@ def render_plans(run: PipelineRun, grid: GridSpec, out_path: str | Path, title: 
                 continue
             x, y = grid.rc_to_xy(p.path_rc[:, 0], p.path_rc[:, 1])
             ax.plot(x, y, label=f"{name}: {path_length_m(p, grid):.2f} m", **STYLES[name])
+        if source == "ground_truth":
+            pts = [
+                (xy, f"{name}: {lab}") for name, v in (violations or {}).items() for xy, lab in v
+            ]
+            for k, ((vx, vy), lab) in enumerate(pts):
+                ax.plot(
+                    vx, vy, "x", color="red", ms=14, mew=3, label="violation" if k == 0 else None
+                )
+                ax.annotate(
+                    lab,
+                    (vx, vy),
+                    xytext=(6, 6),
+                    textcoords="offset points",
+                    fontsize=7,
+                    color="red",
+                )
         ax.plot(*run.scenario.start_xy, "o", color="lime", mec="k", ms=10, label="start")
         ax.plot(*run.scenario.goal_xy, "*", color="gold", mec="k", ms=15, label="goal")
         ax.set_title(label)

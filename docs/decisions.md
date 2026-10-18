@@ -215,8 +215,8 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Not fixed here:** the 0.2 m step pairs (D13) recover full jumps only where the edge falls
   inside one cell; z_max/z_min would track noise extremes (D13). The GT convention (box top if the
   box covers the cell centre) also differs from perception's cell average.
-- **Impact:** to be measured by the M3 path evaluator as the GT collision rate of planned paths
-  (whether a planner actually routes through these cells), not just as a cell rate.
+- **Impact:** measured by `scripts/eval_plan.py` (independent evaluator, D19) as the collision /
+  rise violation rate of planned paths, not just as a cell rate. Numbers: TBD from the clean run.
 
 ## D16. Planner design
 - **Decision:** grid A* on the 0.1 m traversability map (`planning/astar.py`): 8-connected, no
@@ -248,7 +248,8 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   occlusion, unknown = blocked) with the same planner. Baseline-Occ vs Oracle: both effects
   together.
 - **Reason:** changing one factor per pair makes differences attributable.
-- **Evidence:** TBD (M3-B evaluator).
+- **Evidence:** TBD, to be filled from the clean `scripts/eval_plan.py` run (section B: paired
+  differences with bootstrap CIs).
 
 ## D18. Evaluation must be independent of the traversability definitions
 - **Decision:** the M3-B path evaluator will judge paths against the simulated world directly
@@ -260,4 +261,31 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   case at b286a6b: edge-aware roughness (D14) zeroes 19% of textured GT cells in the rough
   family, including both formerly rough-lethal cells; because GT traversability uses the same
   function, the core false-free metric showed nothing.
-- **Evidence:** D14 limitation measurement; evaluator TBD in M3-B.
+- **Evidence:** D14 limitation measurement; the evaluator is `sim/evaluate.py` (D19).
+
+## D19. Independent path evaluator metrics
+- **Decision:** `sim/evaluate.py` scores each path against the raw world, sampled every 0.02 m;
+  limits (`PhysicalLimits`, illustrative): robot radius 0.3 m, max step 0.20 m, max slope 30°.
+  It may not import perception or planning (tests/test_architecture.py).
+- **Metrics and why each is independent of the cost model:**
+  - min clearance / collision: exact 2D distance to box footprints (`World.boxes`), no lethal mask
+    or dilation involved;
+  - max rise: largest height change within 0.2 m along the path, on the GT surface (bilinear
+    heightfield, box top inside a box), not the step feature or its significance gate;
+  - slope, pitch, roll: raw heightfield gradient (np.gradient, bilinear), not the plane fit;
+    samples next to a height discontinuity (a 4-neighbour jump steeper than 40° locally) are
+    steps and count only for max rise;
+  - rough exposure, length in rough, length on features: exact path length inside the
+    generator's feature footprints (scenario.params), weighted by the generator's rms for rough
+    patches, not the roughness feature (which edge masking can zero, D14/D18);
+  - gt_cost: GT traversability cost integral, computed in sim/pipeline.py and labelled
+    DEFINITION-DEPENDENT: it is the only metric that uses the traversability definitions.
+- **Alternatives:** score paths by GT traversability only (cannot reveal definition flaws, D18).
+- **Known gaps:** the 40° discontinuity rule classes a sustained 40–45° slope as steps whose rise
+  over 0.2 m stays below 0.20 m, so it would go unflagged (the generator's ramps are ≤ 25°);
+  rough exposure uses the generator's nominal rms (the patch tapers over its outer 20%).
+- **Evidence:** tests/test_evaluate.py (hand-built worlds: clearance 0.25 vs 0.35 m, 0.25 m
+  terrace rise, 20° plane pitch/roll, chord exposure 0.08 m², 5 cm rotated step is not a slope,
+  35° plane is a slope violation). First use (render, flat_obstacles seed 0, dirty tree):
+  Baseline-Occ passes 0.232 m from the 0.27 m-high box (collision) and TerraNav 0.308 m: the D15
+  residual reaching an actual path.

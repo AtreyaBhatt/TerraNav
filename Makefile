@@ -15,6 +15,8 @@ eval:
 	uv run python scripts/eval_map.py --latency
 	uv run python scripts/eval_trav.py
 	uv run python scripts/eval_trav.py --latency
+	uv run python scripts/eval_plan.py
+	uv run python scripts/eval_plan.py --latency
 
 lint:
 	uv run ruff check src/ tests/ scripts/

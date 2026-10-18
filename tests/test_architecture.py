@@ -36,3 +36,15 @@ def test_package_does_not_import_sim(package, min_files):
         if m == "terranav.sim" or m.startswith("terranav.sim.")
     ]
     assert not offending, f"{package} imports the simulator: " + ", ".join(offending)
+
+
+def test_evaluator_is_independent_of_perception_and_planning():
+    # The path evaluator judges paths against the raw world, never through the traversability /
+    # feature definitions or the planning cost model it is meant to check (docs/decisions.md D18).
+    path = PACKAGES / "sim" / "evaluate.py"
+    offending = [
+        m
+        for m in imported_modules(path)
+        if m.split(".")[:2] in (["terranav", "perception"], ["terranav", "planning"])
+    ]
+    assert not offending, "evaluate.py imports: " + ", ".join(offending)

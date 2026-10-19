@@ -1,0 +1,137 @@
+{
+ "config_hash": "96a4e7ffad40",
+ "configs": {
+  "benchmark": {
+   "alphas": [
+    0.0,
+    0.5,
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0
+   ],
+   "bootstrap_resamples": 2000,
+   "bootstrap_seed": 20261018,
+   "default_alpha": 4.0,
+   "families": [
+    "flat_obstacles",
+    "slopes",
+    "rough",
+    "steps",
+    "mixed"
+   ],
+   "seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007,
+    1008,
+    1009,
+    1010,
+    1011,
+    1012,
+    1013,
+    1014,
+    1015,
+    1016,
+    1017,
+    1018,
+    1019
+   ],
+   "strategy": "flank+start"
+  },
+  "limits": {
+   "max_slope_deg": 30.0,
+   "max_step_m": 0.2,
+   "robot_radius_m": 0.3
+  },
+  "map_grid": {
+   "origin": [
+    0.0,
+    0.0
+   ],
+   "resolution": 0.1,
+   "size_x": 12.0,
+   "size_y": 12.0
+  },
+  "scan": {
+   "DEFAULT_SCAN_K": {
+    "flank": 6,
+    "flank+start": 7,
+    "line": 6
+   },
+   "FLANK_FRACTIONS": [
+    0.1,
+    0.8
+   ],
+   "FLANK_FRACTION_SHIFTS": [
+    0.0,
+    -0.05,
+    0.05,
+    -0.1,
+    0.1,
+    -0.15,
+    0.15,
+    -0.2,
+    0.2,
+    -0.25,
+    0.25
+   ],
+   "FLANK_LATERAL_OFFSET_M": 2.5,
+   "FLANK_TOE_IN_DEG": 30.0,
+   "POSE_CLEARANCE_M": 0.5,
+   "POSE_SEARCH_AWAY_M": 3.0,
+   "POSE_SEARCH_STEP_M": 0.1
+  },
+  "sensor": {
+   "dropout_prob": 0.02,
+   "grazing_cutoff_rad": 1.4835298641951802,
+   "height": 240,
+   "hfov_rad": 1.5184364492350666,
+   "max_depth_z_m": 8.0,
+   "mount_height_m": 0.5,
+   "noise_s0_m": 0.001,
+   "noise_s1_per_m": 0.0015,
+   "pitch_down_rad": 0.4363323129985824,
+   "width": 320
+  },
+  "terrain_grid": {
+   "origin": [
+    0.0,
+    0.0
+   ],
+   "resolution": 0.05,
+   "size_x": 12.0,
+   "size_y": 12.0
+  },
+  "traversability": {
+   "lethal_ucb_k": 0.0,
+   "robot_radius_m": 0.3,
+   "rough_crit_m": 0.05,
+   "slope_crit_deg": 30.0,
+   "step_crit_m": 0.2,
+   "step_gate_for_lethal": true,
+   "w_rough": 0.3,
+   "w_slope": 0.4,
+   "w_step": 0.3
+  }
+ },
+ "git": "0cf7be5ce01d1ea2e5a5754140531f2dc62e5d1f",
+ "json_note": "null in metrics = infinite or not applicable (e.g. clearance with no boxes)",
+ "machine": {
+  "machine": "x86_64",
+  "platform": "Linux-6.18.47-x86_64-with-glibc2.42"
+ },
+ "n_scenarios": 100,
+ "numpy": "2.5.4",
+ "python": "3.13.15",
+ "started": "2026-10-19T11:26:51",
+ "timings_note": "per-stage timings in raw.jsonl were measured inside parallel workers (contended CPU): they are not latency figures",
+ "wall_s": 376.388568374,
+ "workers": 22
+}

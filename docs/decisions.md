@@ -216,9 +216,12 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   inside one cell; z_max/z_min would track noise extremes (D13). The GT convention (box top if the
   box covers the cell centre) also differs from perception's cell average.
 - **Impact:** measured by `scripts/eval_plan.py` (independent evaluator, D19) as the collision /
-  rise violation rate of planned paths, not just as a cell rate. Numbers: TBD from the clean run.
+  rise violation rate of planned paths, not just as a cell rate. At 7426227 (`out/eval_plan.txt`,
+  seeds 0–9): no collision, rise or slope violation for any planner in any family.
 
-- **Update:** addressed by the in-cell span step (D20); family-level effect TBD from the clean run.
+- **Update:** addressed by the in-cell span step (D20). At 7426227 the flat_obstacles collision
+  rate is 0.00 for every planner (was 0.10 for baseline_occ at aeb08ea); core false-free 0.000
+  (8610 GT core cells, `out/eval_trav.txt`).
 
 ## D16. Planner design
 - **Decision:** grid A* on the 0.1 m traversability map (`planning/astar.py`): 8-connected, no
@@ -274,7 +277,23 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
   +0.0009 [−0.0839, +0.0944] (6/0/4), rough +0.1272 [+0.0243, +0.2944] (1/1/8), steps +0.1398
   [+0.0020, +0.3215] (3/0/7), mixed +0.0367 [−0.1132, +0.1753] (3/0/7). Median length ratio vs
   Oracle: terranav 1.016 / 0.999 / 1.005 / 1.006 / 1.008, baseline_occ 1.026 / 0.987 / 0.968 /
-  1.008 / 0.985 (flat_obstacles / slopes / rough / steps / mixed). Post-fix numbers: TBD.
+  1.008 / 0.985 (flat_obstacles / slopes / rough / steps / mixed).
+- **Evidence (7426227, `out/eval_plan.txt`, seeds 0–9, POST-FIX: with D20 and D21):** success 1.00
+  and violation rate 0.00 for every planner and family. Median length ratio vs Oracle: terranav
+  1.016 / 0.999 / 1.005 / 1.006 / 1.008, baseline_occ 1.024 / 0.987 / 0.968 / 1.008 / 0.979
+  (flat_obstacles / slopes / rough / steps / mixed). Paired TerraNav − Baseline-Occ, mean difference [95% CI] (better/equal/worse):
+  - rough: rough exposure −0.1511 [−0.1896, −0.1185] (10/0/0); max rise −0.0567
+    [−0.0735, −0.0413] (10/0/0); length +0.4828 [+0.3665, +0.6196] (0/0/10).
+  - slopes: max rise −0.0248 [−0.0371, −0.0132] (10/0/0); length +0.2154 [+0.1000, +0.3393]
+    (2/0/8).
+  - steps: max rise −0.0388 [−0.0719, −0.0092] (4/6/0); length +0.0489 [−0.0305, +0.1517] (3/0/7).
+  - mixed: rough exposure −0.0024 [−0.0251, +0.0180] (2/7/1); max rise −0.0389 [−0.0702, −0.0136]
+    (7/2/1); length +0.1989 [+0.0705, +0.3504] (2/0/8).
+  - flat_obstacles: length −0.0204 [−0.0783, +0.0473] (7/0/3); rough exposure and max rise 0.
+  Paired TerraNav − Oracle length: +0.2652 [+0.1562, +0.3859] (0/0/10), +0.0009 [−0.0839,
+  +0.0944] (6/0/4), +0.1272 [+0.0243, +0.2944] (1/1/8), +0.1398 [+0.0020, +0.3215] (3/0/7),
+  +0.0357 [−0.1137, +0.1747] (3/0/7) (flat_obstacles / slopes / rough / steps / mixed). These are dev seeds (also used for design); the
+  held-out numbers come from the benchmark (docs/benchmark_protocol.md).
 
 ## D18. Evaluation must be independent of the traversability definitions
 - **Decision:** the M3-B path evaluator will judge paths against the simulated world directly
@@ -336,7 +355,11 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Alternatives:** inflating the lethal mask by an extra safety margin (rejected fallback: costs
   free space everywhere to cover one mechanism); cross-cell z_max / z_min jumps (rejected in D13:
   noise extremes grow with range).
-- **After (family level):** TBD from the clean eval_plan run.
+- **After (family level, 7426227):** `out/eval_plan.txt`: no violations at all (section C
+  "none"); collision rate 0.00 for every planner in flat_obstacles and mixed (was 0.10 for
+  baseline_occ in both and for terranav in mixed at aeb08ea). `out/eval_trav.txt` (flat_obstacles / slopes / rough / steps / mixed): core FF
+  0.000 / n/a (0) / n/a (0) / 0.000 / 0.000; band FF 0.019 / n/a (0) / n/a (0) / 0.000 / 0.032;
+  FL 0.326 / 0.294 / 0.264 / 0.294 / 0.298.
 
 ## D21. Evaluator slope scale
 - **Decision:** the slope violation is measured on the heightfield smoothed by a Gaussian of
@@ -349,5 +372,7 @@ Short records: decision, alternatives considered, reason, evidence. Numbers are 
 - **Alternatives:** raw gradient (texture → false violations); plane fit under the footprint
   (closer to the perception features, which D18 keeps the evaluator independent of).
 - **Evidence:** tests/test_evaluate.py: a 20° ramp face reads 20° ± 0.5° smoothed; 0.4 m-wavelength
-  texture reads 31.1° raw, 2.9° smoothed.
+  texture reads 31.1° raw, 2.9° smoothed. After (7426227, `out/eval_plan.txt`): rough baseline_occ
+  slope violation rate 0.10 → 0.00; mean max slope (smoothed) in rough: terranav 3.9°,
+  baseline_occ 14.7°, oracle 2.5°.
 

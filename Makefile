@@ -1,4 +1,4 @@
-.PHONY: setup test test-all lint format-check eval latency smoke-pv
+.PHONY: setup test test-all lint format-check eval eval-scan benchmark latency smoke-pv
 
 setup:
 	uv sync
@@ -11,10 +11,18 @@ test-all:
 
 # Table evaluations, strictly one after another (each uses all cores). Refuse a dirty tree.
 eval:
-	uv run python scripts/eval_scan.py
 	uv run python scripts/eval_map.py
 	uv run python scripts/eval_trav.py
 	uv run python scripts/eval_plan.py
+
+# Scan-strategy comparison (slow; only when the survey strategy changes). Refuses a dirty tree.
+eval-scan:
+	uv run python scripts/eval_scan.py
+
+# Pre-registered held-out benchmark (docs/benchmark_protocol.md). Refuses a dirty tree; writes
+# results/<git>_<config-hash>/.
+benchmark:
+	uv run python scripts/benchmark.py
 
 # Serial latency measurements. Run only when perception or planning code changed.
 latency:

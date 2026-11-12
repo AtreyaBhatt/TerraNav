@@ -1,0 +1,26 @@
+# TerraNav scan coverage evaluation (measured)
+# git: 7426227b8bb65a6f74a345636bc64de7a9d9003c
+# started: 2026-10-18T19:00:40
+# wall time: 505.3 s
+# seeds 0..9, poses per strategy {'flank+start': 7, 'flank': 6, 'line': 6}, default SensorConfig, 0.1 m map grid
+# 150 jobs, 22 worker(s)
+# coverage = fraction of region cells with >= 1 backprojected point
+
+family          region      flank+start mean  flank+start min        flank mean        flank min         line mean         line min
+flat_obstacles  corridor               0.719            0.641             0.680            0.590             0.379            0.320
+flat_obstacles  reachable              0.396            0.335             0.373            0.311             0.197            0.170
+slopes          corridor               0.788            0.726             0.753            0.688             0.642            0.466
+slopes          reachable              0.431            0.335             0.409            0.314             0.343            0.212
+rough           corridor               0.807            0.784             0.772            0.746             0.728            0.671
+rough           reachable              0.443            0.397             0.421            0.380             0.387            0.358
+steps           corridor               0.799            0.739             0.765            0.704             0.727            0.644
+steps           reachable              0.424            0.375             0.402            0.358             0.377            0.298
+mixed           corridor               0.779            0.753             0.743            0.718             0.580            0.371
+mixed           reachable              0.420            0.344             0.397            0.327             0.298            0.200
+
+line strategy skipped poses (of 6 per scenario, 10 scenarios):
+  flat_obstacles  total  19 / 60, scenarios with >= 1 skip: 10, max per scenario: 2
+  slopes          total   9 / 60, scenarios with >= 1 skip: 6, max per scenario: 2
+  rough           total   4 / 60, scenarios with >= 1 skip: 4, max per scenario: 1
+  steps           total   1 / 60, scenarios with >= 1 skip: 1, max per scenario: 1
+  mixed           total  10 / 60, scenarios with >= 1 skip: 7, max per scenario: 2

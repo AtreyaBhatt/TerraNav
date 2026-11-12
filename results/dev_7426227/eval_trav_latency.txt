@@ -1,0 +1,14 @@
+# TerraNav traversability latency (measured)
+# git: 0cf7be5ce01d1ea2e5a5754140531f2dc62e5d1f
+# started: 2026-10-19T11:17:05
+# wall time: 291.0 s
+# survey flank+start (k = 7), default SensorConfig, default TraversabilityConfig, 0.1 m map grid
+# terrain_features + traversability; serial, seeds 0..4
+# per scenario: median of 3 repeats; machine: x86_64, 24 logical CPUs
+
+family             median       p95
+flat_obstacles      6.0ms     6.1ms
+slopes              6.0ms     6.2ms
+rough               6.1ms     6.2ms
+steps               6.1ms     6.3ms
+mixed               6.1ms     6.3ms

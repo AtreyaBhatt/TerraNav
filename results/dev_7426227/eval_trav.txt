@@ -1,0 +1,26 @@
+# TerraNav traversability evaluation (measured)
+# git: 7426227b8bb65a6f74a345636bc64de7a9d9003c
+# started: 2026-10-18T19:12:34
+# wall time: 209.9 s
+# survey flank+start (k = 7), default SensorConfig, default TraversabilityConfig, 0.1 m map grid
+# seeds 0..9; 50 jobs, 22 worker(s)
+# all counts / rates / MAEs pooled over corridor cells (<= 3 m from start-goal)
+# core FF  = P(perceived non-lethal | GT lethal before dilation)  [safety]
+# band FF  = P(perceived non-lethal | GT lethal after dilation)
+# FL       = P(perceived lethal | GT non-lethal), split by the perceived cell's own
+#            reason: unknown | no estimate (support) | feature >= crit | dilation only
+# conn: share of scenarios with start-goal connected through non-lethal cells
+
+family           GT core  GT leth  GT free   core FF   band FF      FL  FL unkn  FL supp  FL feat   FL dil
+flat_obstacles      8610    16683    56201     0.000     0.019   0.326    0.219    0.000    0.000    0.107
+slopes                 0        0    72884   n/a (0)   n/a (0)   0.294    0.196    0.000    0.000    0.098
+rough                  0        0    72884   n/a (0)   n/a (0)   0.264    0.171    0.000    0.000    0.093
+steps                  1       29    72855     0.000     0.000   0.294    0.184    0.000    0.001    0.110
+mixed               2431     5500    67384     0.000     0.032   0.298    0.194    0.000    0.000    0.104
+
+family           cost MAE  slope MAE  rough MAE  step MAE conn perc  conn GT
+flat_obstacles     0.0006    2.35deg     0.0000    0.0230      1.00     1.00
+slopes             0.0043    0.24deg     0.0008    0.0016      1.00     1.00
+rough              0.0079    0.33deg     0.0010    0.0025      1.00     1.00
+steps              0.0083    0.59deg     0.0006    0.0041      1.00     1.00
+mixed              0.0048    1.07deg     0.0005    0.0082      1.00     1.00

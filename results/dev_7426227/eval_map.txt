@@ -1,0 +1,17 @@
+# TerraNav elevation map evaluation (measured)
+# git: 7426227b8bb65a6f74a345636bc64de7a9d9003c
+# started: 2026-10-18T19:09:06
+# wall time: 207.5 s
+# survey flank+start (k = 7), default SensorConfig, 0.1 m map grid
+# seeds 0..9; 50 jobs, 22 worker(s)
+# coverage: mean over scenarios; raw = observed, fill = observed + filled + footprint
+# errors |z_mean - GT| in metres, pooled over all cells of the family's scenarios
+# goal vis: share with >= 80% of goal-disk cells known
+# connected: share whose start and goal share a 4-connected known component
+
+family          corr raw corr fill reach raw reach fill  obs med  obs p95 fill med fill p95 goal vis connected
+flat_obstacles     0.718     0.734     0.396      0.409   0.0003   0.0050   0.0007   0.0027     1.00      1.00
+slopes             0.787     0.804     0.431      0.445   0.0003   0.0032   0.0009   0.0119     1.00      1.00
+rough              0.806     0.829     0.442      0.458   0.0003   0.0034   0.0011   0.0179     1.00      1.00
+steps              0.798     0.817     0.424      0.436   0.0003   0.0042   0.0009   0.0515     1.00      1.00
+mixed              0.778     0.795     0.419      0.432   0.0003   0.0040   0.0008   0.0095     1.00      1.00

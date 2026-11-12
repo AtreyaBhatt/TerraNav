@@ -1,0 +1,24 @@
+# TerraNav planning latency (measured)
+# git: 0cf7be5ce01d1ea2e5a5754140531f2dc62e5d1f
+# started: 2026-10-19T11:21:56
+# wall time: 294.4 s
+# survey flank+start (k = 7), alpha = 4, default SensorConfig / TraversabilityConfig / PhysicalLimits, 0.1 m map grid
+# plan() = A* + smoothing per planner; serial, seeds 0..4
+# per scenario: median of 3 repeats; machine: x86_64, 24 logical CPUs
+
+family          planner          median       p95
+flat_obstacles  terranav          7.8ms     9.3ms
+flat_obstacles  baseline_occ      7.0ms     7.3ms
+flat_obstacles  oracle            8.4ms    12.1ms
+slopes          terranav          6.8ms    11.3ms
+slopes          baseline_occ      4.6ms     7.0ms
+slopes          oracle            7.1ms    11.3ms
+rough           terranav          8.3ms    11.2ms
+rough           baseline_occ      3.7ms     4.6ms
+rough           oracle           10.7ms    11.6ms
+steps           terranav          7.6ms    10.4ms
+steps           baseline_occ      4.5ms     9.9ms
+steps           oracle            6.0ms    10.9ms
+mixed           terranav          8.3ms     9.5ms
+mixed           baseline_occ      4.6ms     6.6ms
+mixed           oracle            9.1ms    11.9ms

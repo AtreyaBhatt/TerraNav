@@ -1,0 +1,14 @@
+# TerraNav perception latency (measured)
+# git: 0cf7be5ce01d1ea2e5a5754140531f2dc62e5d1f
+# started: 2026-10-19T11:12:05
+# wall time: 299.4 s
+# survey flank+start (k = 7), default SensorConfig, 0.1 m map grid
+# fuse + fill_gaps + mark_footprint; serial (1 process), seeds 0..4
+# per scenario: median of 3 repeats; machine: x86_64, 24 logical CPUs
+
+family             median       p95
+flat_obstacles     33.6ms    43.9ms
+slopes             31.2ms    31.3ms
+rough              29.5ms    31.7ms
+steps              28.5ms    29.3ms
+mixed              29.3ms    31.0ms

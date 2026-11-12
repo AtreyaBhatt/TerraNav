@@ -3,7 +3,7 @@
  "seed": 4,
  "alpha": 4.0,
  "rule": "median (upper of the two middle values for an even count; ties by seed) of the paired TerraNav - Baseline-Occ rough-exposure difference at alpha = 4 over dev seeds 0..9 of the rough family",
- "git": "75fc425ac08818e6417e3943b708acb0bb4fba52-dirty",
+ "git": "876b173dd843aefc370099321d2601fd4afd1895",
  "ranking": [
   {
    "seed": 0,

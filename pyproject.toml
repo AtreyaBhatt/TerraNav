@@ -20,6 +20,7 @@ dev = [
     "pytest>=8.3",
     "hypothesis>=6.112",
     "ruff>=0.6",
+    "imageio-ffmpeg==0.6.0",
 ]
 
 [project.scripts]

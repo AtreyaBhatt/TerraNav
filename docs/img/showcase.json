@@ -1,0 +1,76 @@
+{
+ "family": "rough",
+ "seed": 4,
+ "alpha": 4.0,
+ "rule": "median (upper of the two middle values for an even count; ties by seed) of the paired TerraNav - Baseline-Occ rough-exposure difference at alpha = 4 over dev seeds 0..9 of the rough family",
+ "git": "75fc425ac08818e6417e3943b708acb0bb4fba52-dirty",
+ "ranking": [
+  {
+   "seed": 0,
+   "diff_rough_exposure_m2": -0.23857611820858773
+  },
+  {
+   "seed": 9,
+   "diff_rough_exposure_m2": -0.2357935018324864
+  },
+  {
+   "seed": 7,
+   "diff_rough_exposure_m2": -0.20469496817570199
+  },
+  {
+   "seed": 6,
+   "diff_rough_exposure_m2": -0.18923142193418593
+  },
+  {
+   "seed": 3,
+   "diff_rough_exposure_m2": -0.13650507674716306
+  },
+  {
+   "seed": 4,
+   "diff_rough_exposure_m2": -0.12258344939060986
+  },
+  {
+   "seed": 5,
+   "diff_rough_exposure_m2": -0.11813972650739822
+  },
+  {
+   "seed": 1,
+   "diff_rough_exposure_m2": -0.10273856226091996
+  },
+  {
+   "seed": 2,
+   "diff_rough_exposure_m2": -0.08250040856262524
+  },
+  {
+   "seed": 8,
+   "diff_rough_exposure_m2": -0.0799047380817422
+  }
+ ],
+ "excluded_seeds": [],
+ "metrics": {
+  "baseline_occ": {
+   "success": true,
+   "length_m": 10.923913764391477,
+   "rough_exposure_m2": 0.12258344939060986,
+   "max_rise_m": 0.060790790571473054,
+   "max_slope_deg": 16.98926821093485,
+   "violations": []
+  },
+  "terranav": {
+   "success": true,
+   "length_m": 11.876200365272098,
+   "rough_exposure_m2": 0.0,
+   "max_rise_m": 0.0,
+   "max_slope_deg": 1.769442005642843,
+   "violations": []
+  },
+  "oracle": {
+   "success": true,
+   "length_m": 11.05490690846521,
+   "rough_exposure_m2": 0.0,
+   "max_rise_m": 0.0003688163383678822,
+   "max_slope_deg": 5.595151307714726,
+   "violations": []
+  }
+ }
+}
